@@ -1,22 +1,35 @@
 from fastapi import FastAPI, HTTPException, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse
 import yt_dlp
 import asyncio
 import logging
 from typing import AsyncIterator
 import aiohttp
 from aiohttp.client_exceptions import ClientPayloadError
-
+import subprocess
 import os
 import json
 import tempfile
+import psutil
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
+# Global OAuth State
+class AuthState:
+    def __init__(self):
+        self.current_code = None
+        self.current_url = None
+        self.is_linking = False
+        self.last_error = None
+        self.auth_file = "/tmp/youtube_oauth.cache"
+
+auth_state = AuthState()
 
 HARDCODED_COOKIES_JSON = '''[
 {
@@ -333,6 +346,7 @@ app.add_middleware(
 # yt-dlp options (simplified for reliability with specific cookies)
 # yt-dlp options (simplified for reliability with specific cookies)
 # yt-dlp options (simplified for reliability with specific cookies)
+# yt-dlp options (simplified for reliability with specific cookies)
 YDL_OPTS_AUDIO = {
     'format': 'bestaudio/best',
     'quiet': True,
@@ -340,13 +354,9 @@ YDL_OPTS_AUDIO = {
     'extract_flat': False,
     'nocheckcertificate': True,
     'extractor_args': {'youtube': {'player_client': ['android']}},
+    'cache_dir': '/tmp/yt-cache'
 }
 
-if COOKIE_FILE:
-    YDL_OPTS_AUDIO['cookiefile'] = COOKIE_FILE
-
-
-# yt-dlp options for video - Capped at 480p for retro aesthetic
 YDL_OPTS_VIDEO = {
     'format': 'best[height<=480]/best',
     'quiet': True,
@@ -354,9 +364,18 @@ YDL_OPTS_VIDEO = {
     'extract_flat': False,
     'nocheckcertificate': True,
     'extractor_args': {'youtube': {'player_client': ['android']}},
+    'cache_dir': '/tmp/yt-cache'
 }
 
+# Check for OAuth - this is more reliable for bot detection
+# yt-dlp stores oauth tokens in the cache dir
+if os.path.exists('/tmp/yt-cache'):
+    YDL_OPTS_AUDIO['username'] = 'oauth2'
+    YDL_OPTS_VIDEO['username'] = 'oauth2'
+    logger.info("Found OAuth cache, enabling OAuth2 for extraction")
+
 if COOKIE_FILE:
+    YDL_OPTS_AUDIO['cookiefile'] = COOKIE_FILE
     YDL_OPTS_VIDEO['cookiefile'] = COOKIE_FILE
 
 
@@ -364,7 +383,13 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
     """Stream audio or video chunks from YouTube URL"""
     try:
         # Get video info
-        opts = YDL_OPTS_VIDEO if is_video else YDL_OPTS_AUDIO
+        opts = YDL_OPTS_VIDEO.copy() if is_video else YDL_OPTS_AUDIO.copy()
+        
+        # Check for OAuth - this is more reliable for bot detection
+        # yt-dlp stores oauth tokens in the cache dir
+        if os.path.exists('/tmp/yt-cache'):
+            opts['username'] = 'oauth2'
+            logger.info("Using OAuth2 for extraction")
         
         try:
              with yt_dlp.YoutubeDL(opts) as ydl:
@@ -506,10 +531,235 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
             raise HTTPException(status_code=500, detail=str(e))
         raise e
 
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    """Win98 Style Management Dashboard"""
+    
+    # Check if we have auth or cookies
+    has_cookies = COOKIE_FILE is not None
+    has_oauth = os.path.exists(auth_state.auth_file)
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>YouTube Proxy - Control Panel</title>
+        <link rel="stylesheet" href="https://unpkg.com/98.css">
+        <style>
+            body {{ background-color: #008080; padding: 20px; font-family: "MS Sans Serif", Arial, sans-serif; }}
+            .window {{ max-width: 600px; margin: 0 auto; }}
+            .status-bar {{ padding: 2px; }}
+            .auth-box {{ margin-top: 10px; padding: 10px; background: #fff; border: 1px inset #808080; min-height: 50px; }}
+            pre {{ font-family: monospace; font-size: 12px; }}
+            .btn-large {{ margin: 5px; }}
+            .hidden {{ display: none; }}
+            .code-text {{ font-size: 24px; font-weight: bold; color: blue; text-align: center; margin: 10px 0; }}
+        </style>
+    </head>
+    <body>
+        <div class="window">
+            <div class="title-bar">
+                <div class="title-bar-text">YouTube Proxy Configuration</div>
+                <div class="title-bar-controls">
+                    <button aria-label="Minimize"></button>
+                    <button aria-label="Maximize"></button>
+                    <button aria-label="Close"></button>
+                </div>
+            </div>
+            <div class="window-body">
+                <p>Status: <strong>Proxy is Online</strong></p>
+                
+                <fieldset>
+                    <legend>Authentication Methods</legend>
+                    <div class="field-row">
+                        <label>Hardcoded Cookies:</label>
+                        <span>{ "ACTIVE (Netscape format)" if has_cookies else "INACTIVE" }</span>
+                    </div>
+                    <div class="field-row">
+                        <label>YouTube Account (OAuth2):</label>
+                        <span>{ "LINKED" if has_oauth else "NOT LINKED" }</span>
+                    </div>
+                </fieldset>
+
+                <div style="margin-top: 20px; display: flex; flex-wrap: wrap; justify-content: center;">
+                    <button onclick="startLinking()" id="linkBtn" class="btn-large">Link YouTube Account...</button>
+                    <button onclick="window.location.reload()" class="btn-large">Refresh Status</button>
+                </div>
+
+                <div id="authDialog" class="hidden">
+                    <fieldset style="margin-top: 20px;">
+                        <legend>Linking Instructions</legend>
+                        <p id="authMsg">Please wait, generating link code...</p>
+                        <div id="authCodeBox" class="hidden">
+                            <p>1. Go to: <a href="#" id="authUrl" target="_blank">Loading...</a></p>
+                            <p>2. Enter this code:</p>
+                            <div class="code-text" id="authCode">---- ----</div>
+                            <p>3. Complete the login on your phone/browser.</p>
+                            <p><i>Server will automatically link once you finish.</i></p>
+                        </div>
+                    </fieldset>
+                </div>
+                
+                <fieldset style="margin-top: 20px;">
+                    <legend>Troubleshooting</legend>
+                    <p>If you see "Sign in to confirm you're not a bot", use the Link Account button above.</p>
+                </fieldset>
+            </div>
+            <div class="status-bar">
+                <p class="status-bar-field">v{yt_dlp.version.__version__}</p>
+                <p class="status-bar-field">CPU: {psutil.cpu_percent()}%</p>
+                <p class="status-bar-field">System: Python 3.11</p>
+            </div>
+        </div>
+
+        <script>
+            async function startLinking() {{
+                const btn = document.getElementById('linkBtn');
+                const dialog = document.getElementById('authDialog');
+                const msg = document.getElementById('authMsg');
+                const codeBox = document.getElementById('authCodeBox');
+                
+                btn.disabled = true;
+                dialog.classList.remove('hidden');
+                
+                try {{
+                    const resp = await fetch('/auth/link');
+                    const data = await resp.json();
+                    
+                    if (data.status === 'linking' || data.status === 'started') {{
+                         pollStatus();
+                    }} else {{
+                        alert('Error: ' + data.detail);
+                        btn.disabled = false;
+                    }}
+                }} catch (e) {{
+                    alert('Network error: ' + e);
+                    btn.disabled = false;
+                }}
+            }}
+
+            async function pollStatus() {{
+                const msg = document.getElementById('authMsg');
+                const codeBox = document.getElementById('authCodeBox');
+                const codeLabel = document.getElementById('authCode');
+                const urlLabel = document.getElementById('authUrl');
+                
+                const timer = setInterval(async () => {{
+                    try {{
+                        const resp = await fetch('/auth/status');
+                        const data = await resp.json();
+                        
+                        if (data.code) {{
+                            msg.innerText = 'Go to the URL below:';
+                            codeBox.classList.remove('hidden');
+                            codeLabel.innerText = data.code;
+                            urlLabel.href = data.url;
+                            urlLabel.innerText = data.url;
+                        }}
+                        
+                        if (data.status === 'linked') {{
+                            clearInterval(timer);
+                            alert('YouTube account linked successfully!');
+                            window.location.reload();
+                        }}
+                        
+                        if (data.error) {{
+                             clearInterval(timer);
+                             alert('Linking failed: ' + data.error);
+                             window.location.reload();
+                        }}
+                    }} catch (e) {{}}
+                }}, 2000);
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+@app.get("/auth/status")
+async def get_auth_status():
+    """Check current linking status"""
+    status = "idle"
+    if auth_state.is_linking:
+        status = "linking"
+    if os.path.exists(auth_state.auth_file):
+        status = "linked"
+        
+    return {
+        "status": status,
+        "code": auth_state.current_code,
+        "url": auth_state.current_url,
+        "error": auth_state.last_error
+    }
+
+@app.get("/auth/link")
+async def start_auth_link():
+    """Trigger the yt-dlp OAuth flow in background"""
+    if auth_state.is_linking:
+        return {"status": "already_linking"}
+        
+    auth_state.is_linking = True
+    auth_state.current_code = None
+    auth_state.current_url = None
+    auth_state.last_error = None
+    
+    # Start yt-dlp with --username oauth2 in a thread
+    async def run_oauth():
+        try:
+            cmd = [
+                "yt-dlp",
+                "--username", "oauth2",
+                "--password", "",
+                "--cache-dir", "/tmp/yt-cache",
+                "--token-from-browser", "none",
+                "https://www.youtube.com/watch?v=ygsLpOwufoM", # dummy just to trigger it
+                "--simulate"
+            ]
+            
+            # Using Popen to capture stdout line by line
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            
+            # Watch for the code in the output
+            # Example: [youtube] To sign in, go to https://www.google.com/device and enter ABCD-1234
+            for line in process.stdout:
+                logger.info(f"OAUTH LOG: {line.strip()}")
+                if "https://www.google.com/device" in line:
+                    parts = line.split("enter")
+                    if len(parts) > 1:
+                        auth_state.current_code = parts[1].strip()
+                        auth_state.current_url = "https://www.google.com/device"
+                        logger.info(f"FOUND CODE: {auth_state.current_code}")
+                
+                # Check for success
+                if "logged in" in line.lower() or "linked" in line.lower():
+                    logger.info("OAuth success detected in logs")
+                    
+            process.wait()
+            if process.returncode != 0 and not auth_state.current_code:
+                 auth_state.last_error = f"Process exited with {process.returncode}"
+                 
+            # Note: yt-dlp doesn't always exit 0 when just simulating
+            auth_state.is_linking = False
+            
+        except Exception as e:
+            logger.error(f"OAuth thread failed: {e}")
+            auth_state.last_error = str(e)
+            auth_state.is_linking = False
+            
+    asyncio.create_task(run_oauth())
+    return {"status": "started"}
+
 @app.get("/")
 async def root():
-    """Health check endpoint"""
-    return {"status": "ok", "service": "youtube-proxy"}
+    """Home redirects to dashboard"""
+    return RedirectResponse(url="/dashboard")
 
 @app.api_route("/stream/{video_id}", methods=["GET", "HEAD"])
 async def stream_audio(video_id: str, request: Request):
