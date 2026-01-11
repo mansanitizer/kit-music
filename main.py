@@ -453,6 +453,11 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
             opts['username'] = 'oauth2'
             logger.info("Using OAuth2 for extraction")
         
+        manual_ua = auth_state.get_manual_ua()
+        if manual_ua:
+            opts['user_agent'] = manual_ua
+            logger.info("Using manual User-Agent for extraction")
+            
         try:
              with yt_dlp.YoutubeDL(opts) as ydl:
                 logger.info(f"Extracting info for {url} (video={is_video})")
@@ -484,14 +489,15 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
                 if not use_cookies and 'cookiefile' in f_opts:
                     del f_opts['cookiefile']
                 elif use_cookies and not f_opts.get('cookiefile'):
-                    # Ensure we have our best cookies if we want them
                     if os.path.exists(auth_state.manual_cookie_file):
                         f_opts['cookiefile'] = auth_state.manual_cookie_file
                     elif COOKIE_FILE:
                         f_opts['cookiefile'] = COOKIE_FILE
                 
+                if manual_ua:
+                    f_opts['user_agent'] = manual_ua
+                
                 f_opts['extractor_args'] = strategy_args
-                logger.info(f"Retrying with strategy: {strategy_args} (cookies={use_cookies})")
                 
                 try:
                     with yt_dlp.YoutubeDL(f_opts) as ydl:
@@ -1041,6 +1047,10 @@ async def test_stream(test_type: str, video_id: str):
         opts = YDL_OPTS_VIDEO.copy() if is_video else YDL_OPTS_AUDIO.copy()
         
         auth_method = "None"
+        manual_ua = auth_state.get_manual_ua()
+        if manual_ua:
+            opts['user_agent'] = manual_ua
+            
         if os.path.exists(auth_state.manual_cookie_file):
             opts['cookiefile'] = auth_state.manual_cookie_file
             auth_method = "Manual Cookies"
@@ -1057,9 +1067,25 @@ async def test_stream(test_type: str, video_id: str):
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 results["steps"][-1].update({"status": "success", "title": info.get('title')})
+                
+                # Capture all formats for debugging
+                if info.get('formats'):
+                    results["available_formats"] = [
+                        {"ext": f.get('ext'), "resolution": f.get('resolution'), "note": f.get('format_note')}
+                        for f in info['formats']
+                    ][:20]  # Top 20
         except Exception as e:
             results["steps"][-1].update({"status": "failed", "error": str(e)})
-            return results
+            # If extraction failed, still try to see if a simple 'best' works
+            results["steps"].append({"name": "Format Fallback Check", "status": "pending"})
+            try:
+                opts['format'] = 'best'
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    results["steps"][-1].update({"status": "success", "note": "Only generic 'best' format found"})
+            except:
+                results["steps"][-1].update({"status": "failed"})
+                return results
 
         # Step 2: URL Resolution
         results["steps"].append({"name": "URL Resolution", "status": "pending"})
