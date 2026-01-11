@@ -86,7 +86,7 @@ YDL_OPTS_AUDIO = {
     'nocheckcertificate': True,
     'extractor_args': {
         'youtube': {
-            'player_client': ['ios'],
+            'player_client': ['tv'],
         }
     },
 }
@@ -104,7 +104,7 @@ YDL_OPTS_VIDEO = {
     'nocheckcertificate': True,
     'extractor_args': {
         'youtube': {
-            'player_client': ['ios'],
+            'player_client': ['tv'],
         }
     },
 }
