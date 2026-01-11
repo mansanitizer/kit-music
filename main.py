@@ -49,7 +49,7 @@ YDL_OPTS_AUDIO = {
 
 # yt-dlp options for video - Capped at 480p for retro aesthetic and bandwidth efficiency
 YDL_OPTS_VIDEO = {
-    'format': 'best[height<=480][ext=mp4]/best[height<=480]/best',
+    'format': 'best[height<=480]/best',
     'quiet': True,
     'no_warnings': True,
     'extract_flat': False,
@@ -63,19 +63,20 @@ YDL_OPTS_VIDEO = {
     },
 }
 
-async def stream_content(url: str, is_video: bool = False) -> AsyncIterator[bytes]:
+async def stream_content(url: str, is_video: bool = False, client_headers: dict = None) -> AsyncIterator[bytes]:
     """Stream audio or video chunks from YouTube URL"""
     try:
         opts = YDL_OPTS_VIDEO if is_video else YDL_OPTS_AUDIO
         
         # Get video info
         with yt_dlp.YoutubeDL(opts) as ydl:
+            logger.info(f"Extracting info for {url} (video={is_video})")
             info = ydl.extract_info(url, download=False)
             
             if not info:
+                logger.error(f"yt-dlp failed to extract info for {url}")
                 raise HTTPException(status_code=404, detail="Video not found")
             
-            # Try to get stream URL
             stream_url = info.get('url')
             
             if not stream_url:
@@ -83,17 +84,14 @@ async def stream_content(url: str, is_video: bool = False) -> AsyncIterator[byte
                 selected_format = None
                 
                 if not is_video:
-                    # Prefer audio-only formats
                     for fmt in formats:
                         if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
                             selected_format = fmt
                             break
                 
-                # Fallback or video selection
                 if not selected_format:
                     for fmt in formats:
                         if fmt.get('url'):
-                            # For video, we want both audio and video
                             if is_video:
                                 if fmt.get('acodec') != 'none' and fmt.get('vcodec') != 'none':
                                     selected_format = fmt
@@ -103,7 +101,6 @@ async def stream_content(url: str, is_video: bool = False) -> AsyncIterator[byte
                                     selected_format = fmt
                                     break
                 
-                # Final resort
                 if not selected_format and formats:
                     selected_format = formats[0]
                 
@@ -115,45 +112,59 @@ async def stream_content(url: str, is_video: bool = False) -> AsyncIterator[byte
             logger.info(f"Streaming {'video' if is_video else 'audio'} from URL: {stream_url[:100]}...")
             
             # Stream with comprehensive headers
-            timeout = aiohttp.ClientTimeout(total=300 if is_video else 30, connect=10) # Larger timeout for video
+            timeout = aiohttp.ClientTimeout(total=600 if is_video else 60, connect=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                headers = opts['http_headers'].copy()
-                headers['Range'] = 'bytes=0-'
+                # Prepare headers for the final YouTube fetch
+                target_headers = opts['http_headers'].copy()
+                
+                # Pass through the Range header if requested by the client
+                if client_headers and 'range' in {k.lower() for k in client_headers}:
+                    range_val = next(v for k, v in client_headers.items() if k.lower() == 'range')
+                    target_headers['Range'] = range_val
+                    logger.info(f"Forwarding client range: {range_val}")
+                else:
+                    target_headers['Range'] = 'bytes=0-'
                 
                 async with session.get(
                     stream_url,
-                    headers=headers,
+                    headers=target_headers,
                     allow_redirects=True
                 ) as resp:
                     if resp.status not in [200, 206]:
-                        logger.error(f"Stream fetch failed: {resp.status} - {await resp.text()}")
+                        err_text = await resp.text()
+                        logger.error(f"YouTube fetch failed: {resp.status} - {err_text[:200]}")
                         raise HTTPException(
                             status_code=resp.status,
-                            detail=f"Failed to fetch stream: {resp.status}"
+                            detail=f"Failed to fetch from YouTube: {resp.status}"
                         )
                     
-                    # Stream in larger chunks for video
-                    chunk_size = 65536 if is_video else 8192
+                    chunk_size = 65536 if is_video else 16384
                     async for chunk in resp.content.iter_chunked(chunk_size):
                         yield chunk
                         
     except Exception as e:
-        logger.error(f"Stream error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Stream error: {str(e)}", exc_info=True)
+        if not isinstance(e, HTTPException):
+            raise HTTPException(status_code=500, detail=str(e))
+        raise e
 
 @app.get("/")
 async def root():
     """Health check endpoint"""
     return {"status": "ok", "service": "youtube-proxy"}
 
-@app.get("/stream/{video_id}")
-async def stream_audio(video_id: str):
+@app.get("/stream/{video_id}", methods=["GET", "HEAD"])
+async def stream_audio(video_id: str, request: Request):
     """Stream audio for a YouTube video ID"""
     try:
-        logger.info(f"Audio stream request for video: {video_id}")
+        logger.info(f"Audio {request.method} request for: {video_id}")
         url = f"https://www.youtube.com/watch?v={video_id}"
+        
+        if request.method == "HEAD":
+            return Response(status_code=200, headers={"Accept-Ranges": "bytes", "Content-Type": "audio/mpeg"})
+
         return StreamingResponse(
-            stream_content(url, is_video=False),
+            stream_content(url, is_video=False, client_headers=dict(request.headers)),
             media_type="audio/mpeg",
             headers={
                 "Content-Disposition": f'inline; filename="audio-{video_id}.mp3"',
@@ -161,20 +172,24 @@ async def stream_audio(video_id: str):
                 "Accept-Ranges": "bytes",
             }
         )
-    except HTTPException:
-        raise
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        logger.error(f"Error streaming audio {video_id}: {str(e)}")
+        logger.error(f"Error in stream_audio: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/video/{video_id}")
-async def stream_video(video_id: str):
+@app.get("/video/{video_id}", methods=["GET", "HEAD"])
+async def stream_video(video_id: str, request: Request):
     """Stream video for a YouTube video ID"""
     try:
-        logger.info(f"Video stream request for video: {video_id}")
+        logger.info(f"Video {request.method} request for: {video_id}")
         url = f"https://www.youtube.com/watch?v={video_id}"
+        
+        if request.method == "HEAD":
+            return Response(status_code=200, headers={"Accept-Ranges": "bytes", "Content-Type": "video/mp4"})
+
         return StreamingResponse(
-            stream_content(url, is_video=True),
+            stream_content(url, is_video=True, client_headers=dict(request.headers)),
             media_type="video/mp4",
             headers={
                 "Content-Disposition": f'inline; filename="video-{video_id}.mp4"',
@@ -182,10 +197,10 @@ async def stream_video(video_id: str):
                 "Accept-Ranges": "bytes",
             }
         )
-    except HTTPException:
-        raise
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        logger.error(f"Error streaming video {video_id}: {str(e)}")
+        logger.error(f"Error in stream_video: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
