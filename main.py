@@ -362,6 +362,7 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
     """Stream audio or video chunks from YouTube URL"""
     try:
         opts = YDL_OPTS_VIDEO if is_video else YDL_OPTS_AUDIO
+        selected_format = None
         
         # Get video info
         with yt_dlp.YoutubeDL(opts) as ydl:
