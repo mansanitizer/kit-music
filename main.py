@@ -365,17 +365,13 @@ def setup_cookies():
 COOKIE_FILE = setup_cookies()
 
 
-# yt-dlp options (simplified for reliability with specific cookies)
-# yt-dlp options (simplified for reliability with specific cookies)
-# yt-dlp options (simplified for reliability with specific cookies)
-# yt-dlp options (simplified for reliability with specific cookies)
 YDL_OPTS_AUDIO = {
     'format': 'bestaudio/best',
     'quiet': True,
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'extractor_args': {'youtube': {'player_client': ['android']}},
+    'extractor_args': {'youtube': {'player_client': ['tv', 'web', 'android']}},
     'cache_dir': '/tmp/yt-cache'
 }
 
@@ -385,7 +381,7 @@ YDL_OPTS_VIDEO = {
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'extractor_args': {'youtube': {'player_client': ['android']}},
+    'extractor_args': {'youtube': {'player_client': ['tv', 'web', 'android']}},
     'cache_dir': '/tmp/yt-cache'
 }
 
@@ -421,10 +417,11 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
         except Exception as e:
             # Fallback chain: Try different clients without cookies if we get a "Sign in" or "Bot" error
             error_msg = str(e).lower()
-            if any(s in error_msg for s in ["sign in", "bot", "403", "unsupported", "content is not available"]):
-                 logger.warning(f"Strategy 1 failed ({e}), trying Strategy 2: Android client without cookies...")
+            if any(s in error_msg for s in ["sign in", "bot", "403", "unsupported", "not available"]):
+                 logger.warning(f"Strategy 1 failed ({e}), trying Strategy 2: Fallback clients without cookies...")
                  
                  fallback_strategies = [
+                     {'youtube': {'player_client': ['tv']}},
                      {'youtube': {'player_client': ['android']}},
                      {'youtube': {'player_client': ['mweb']}},
                      {'youtube': {'player_client': ['ios']}},
