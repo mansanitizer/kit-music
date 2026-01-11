@@ -1,23 +1,17 @@
-from fastapi import FastAPI, HTTPException, Response, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+
 import yt_dlp
-import asyncio
 import logging
-from typing import AsyncIterator
-import aiohttp
-from aiohttp.client_exceptions import ClientPayloadError
-
-import os
 import json
+import os
 import tempfile
+import asyncio
+import aiohttp
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Use the Cookies exactly as they are in main.py
 HARDCODED_COOKIES_JSON = '''[
 {
     "domain": ".youtube.com",
@@ -269,18 +263,13 @@ def setup_cookies():
         
     if not cookies_env:
         logger.error("MISSING: YOUTUBE_COOKIES environment variable and HARDCODED_COOKIES_JSON are not set!")
-        # Log all keys to help debug
-        keys = list(os.environ.keys())
-        # Mask sensitive keys
-        safe_keys = [k for k in keys if not any(s in k.lower() for s in ['key', 'secret', 'token', 'pass'])]
-        logger.info(f"Available environment variables (keys only): {', '.join(safe_keys)}")
         return None
         
     try:
         cookies = json.loads(cookies_env)
         
         # Create a temp file for cookies
-        fd, path = tempfile.mkstemp(suffix='.txt', text=True)
+        fd, path = tempfile.mkstemp(suffix='.txt', text=True) # file closed later manually for tests
         
         with os.fdopen(fd, 'w') as f:
             f.write("# Netscape HTTP Cookie File\n")
@@ -318,21 +307,9 @@ def setup_cookies():
         return None
 
 COOKIE_FILE = setup_cookies()
+print(f"Cookie file: {COOKIE_FILE}")
 
-app = FastAPI(title="YouTube Audio Proxy")
-
-# CORS - allow Netlify domain
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Replace with your Netlify domain in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# yt-dlp options (simplified for reliability with specific cookies)
-# yt-dlp options (simplified for reliability with specific cookies)
-# yt-dlp options (simplified for reliability with specific cookies)
+# The options we JUST committed to main.py
 YDL_OPTS_AUDIO = {
     'format': 'bestaudio/best',
     'quiet': True,
@@ -345,196 +322,70 @@ YDL_OPTS_AUDIO = {
 if COOKIE_FILE:
     YDL_OPTS_AUDIO['cookiefile'] = COOKIE_FILE
 
-
-# yt-dlp options for video - Capped at 480p for retro aesthetic
-YDL_OPTS_VIDEO = {
-    'format': 'best[height<=480]/best',
-    'quiet': True,
-    'no_warnings': True,
-    'extract_flat': False,
-    'nocheckcertificate': True,
-    'extractor_args': {'youtube': {'player_client': ['android']}},
-}
-
-if COOKIE_FILE:
-    YDL_OPTS_VIDEO['cookiefile'] = COOKIE_FILE
-
-
-async def stream_content(url: str, is_video: bool = False, client_headers: dict = None) -> AsyncIterator[bytes]:
-    """Stream audio or video chunks from YouTube URL"""
+async def check_stream():
+    # A video ID that failed in user logs
+    url = "https://www.youtube.com/watch?v=FATTzbm78cc"
+    
+    print(f"Attempting to extract: {url}")
+    
     try:
-        opts = YDL_OPTS_VIDEO if is_video else YDL_OPTS_AUDIO
-        selected_format = None
-        
-        # Get video info
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            logger.info(f"Extracting info for {url} (video={is_video})")
+        with yt_dlp.YoutubeDL(YDL_OPTS_AUDIO) as ydl:
+            logger.info(f"Extracting info for {url}")
             info = ydl.extract_info(url, download=False)
             
-            if not info:
-                logger.error(f"yt-dlp failed to extract info for {url}")
-                raise HTTPException(status_code=404, detail="Video not found")
-            
+            selected_format = None
             stream_url = info.get('url')
             
-            if not stream_url:
+            if stream_url:
+                selected_format = info
+            else:
                 formats = info.get('formats', [])
                 selected_format = None
-                
-                if not is_video:
-                    for fmt in formats:
-                        if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
-                            selected_format = fmt
-                            break
-                
-                if not selected_format:
-                    for fmt in formats:
-                        if fmt.get('url'):
-                            if is_video:
-                                if fmt.get('acodec') != 'none' and fmt.get('vcodec') != 'none':
-                                    selected_format = fmt
-                                    break
-                            else:
-                                if fmt.get('acodec') != 'none':
-                                    selected_format = fmt
-                                    break
-                
+                for fmt in formats:
+                    if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
+                        selected_format = fmt
+                        break
                 if not selected_format and formats:
                     selected_format = formats[0]
                 
-                if not selected_format or not selected_format.get('url'):
-                    raise HTTPException(status_code=404, detail="No playable format found")
-                
-                stream_url = selected_format['url']
-            else:
-                selected_format = info
+                if selected_format:
+                     stream_url = selected_format.get('url')
+
+            if not stream_url:
+                print("Failed to find stream URL")
+                return
+
+            print(f"Stream URL obtained: {stream_url[:50]}...")
             
-            logger.info(f"Streaming {'video' if is_video else 'audio'} from URL: {stream_url[:100]}...")
+            # Now try to FETCH it to see if we get 403
+            # We must use similar headers to main.py
+            target_headers = selected_format.get('http_headers', {}).copy() if selected_format else {}
+            if not target_headers:
+                 target_headers = {
+                      'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+                      'Accept': '*/*',
+                 }
             
-            # Stream with comprehensive headers
-            timeout = aiohttp.ClientTimeout(total=600 if is_video else 60, connect=15)
+            target_headers['Range'] = 'bytes=0-1024'
+            
+            print(f"DEBUG: Headers keys: {list(target_headers.keys())}")
+            print(f"DEBUG: User-Agent: {target_headers.get('User-Agent')}")
+
+            
+            timeout = aiohttp.ClientTimeout(total=30, connect=10)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-            # Prepare headers for the final YouTube fetch
-                target_headers = selected_format.get('http_headers', {}).copy()
-                if not target_headers:
-                    target_headers = {
-                        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-                        'Accept': '*/*', 
-                    }
-                
-                # Pass through the Range header if requested by the client
-                if client_headers and 'range' in {k.lower() for k in client_headers}:
-                    range_val = next(v for k, v in client_headers.items() if k.lower() == 'range')
-                    target_headers['Range'] = range_val
-                    logger.info(f"Forwarding client range: {range_val}")
-                else:
-                    target_headers['Range'] = 'bytes=0-'
-                
-                async with session.get(
-                    stream_url,
-                    headers=target_headers,
-                    allow_redirects=True
-                ) as resp:
-                    if resp.status not in [200, 206]:
-                        err_text = await resp.text()
-                        logger.error(f"YouTube fetch failed: {resp.status} - {err_text[:200]}")
-                        raise HTTPException(
-                            status_code=resp.status,
-                            detail=f"Failed to fetch from YouTube: {resp.status}"
-                        )
-                    
-                    logger.info(f"YouTube responded with {resp.status}, content-length: {resp.headers.get('Content-Length')}")
-                    
-                    chunk_size = 65536 if is_video else 16384
-                    count = 0
-                    try:
-                        async for chunk in resp.content.iter_chunked(chunk_size):
-                            yield chunk
-                            count += 1
-                            if count == 1:
-                                logger.info("First chunk yielded successfully")
-                    except ClientPayloadError as e:
-                        logger.warning(f"Stream interrupted (ClientPayloadError): {e}")
-                        # Don't re-raise, just stop yielding
-                        return
-                    except Exception as e:
-                        logger.error(f"Stream error during iteration: {e}")
-                        raise e
-                    
-                    if count == 0:
-                        logger.warning("No chunks were yielded from YouTube response body!")
-                        
+                async with session.get(stream_url, headers=target_headers) as resp:
+                    print(f"Response Status: {resp.status}")
+                    if resp.status == 403:
+                        text = await resp.text()
+                        print(f"403 Body: {text[:200]}")
+                    elif resp.status == 200 or resp.status == 206:
+                        print("SUCCESS! Stream is accessible.")
+                    else:
+                        print(f"Unexpected status: {resp.status}")
+
     except Exception as e:
-        logger.error(f"Stream error: {str(e)}", exc_info=True)
-        if not isinstance(e, HTTPException):
-            raise HTTPException(status_code=500, detail=str(e))
-        raise e
-
-@app.get("/")
-async def root():
-    """Health check endpoint"""
-    return {"status": "ok", "service": "youtube-proxy"}
-
-@app.api_route("/stream/{video_id}", methods=["GET", "HEAD"])
-async def stream_audio(video_id: str, request: Request):
-    """Stream audio for a YouTube video ID"""
-    try:
-        logger.info(f"Audio {request.method} request for: {video_id}")
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        
-        if request.method == "HEAD":
-            return Response(status_code=200, headers={"Accept-Ranges": "bytes", "Content-Type": "audio/mpeg"})
-
-        return StreamingResponse(
-            stream_content(url, is_video=False, client_headers=dict(request.headers)),
-            media_type="audio/mpeg",
-            headers={
-                "Content-Disposition": f'inline; filename="audio-{video_id}.mp3"',
-                "Cache-Control": "no-cache",
-                "Accept-Ranges": "bytes",
-            }
-        )
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        logger.error(f"Error in stream_audio: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.api_route("/video/{video_id}", methods=["GET", "HEAD"])
-async def stream_video(video_id: str, request: Request):
-    """Stream video for a YouTube video ID"""
-    try:
-        logger.info(f"Video {request.method} request for: {video_id}")
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        
-        if request.method == "HEAD":
-            return Response(status_code=200, headers={"Accept-Ranges": "bytes", "Content-Type": "video/mp4"})
-
-        return StreamingResponse(
-            stream_content(url, is_video=True, client_headers=dict(request.headers)),
-            media_type="video/mp4",
-            headers={
-                "Content-Disposition": f'inline; filename="video-{video_id}.mp4"',
-                "Cache-Control": "no-cache",
-                "Accept-Ranges": "bytes",
-            }
-        )
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        logger.error(f"Error in stream_video: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/health")
-async def health():
-    """Detailed health check"""
-    return {
-        "status": "healthy",
-        "yt_dlp_version": yt_dlp.version.__version__,
-        "service": "youtube-proxy"
-    }
+        print(f"Exception: {e}")
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
+    asyncio.run(check_stream())
