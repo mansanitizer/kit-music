@@ -1,4 +1,4 @@
 fastapi==0.115.0
 uvicorn[standard]==0.32.0
-yt-dlp>=2024.12.13
+yt-dlp
 aiohttp==3.11.10

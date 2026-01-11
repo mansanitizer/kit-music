@@ -371,18 +371,38 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
                 logger.info(f"Extracting info for {url} (video={is_video})")
                 info = ydl.extract_info(url, download=False)
         except Exception as e:
-            # Fallback: Try without cookies if we get a "Sign in" or "Bot" error
+            # Fallback chain: Try different clients without cookies if we get a "Sign in" or "Bot" error
             error_msg = str(e).lower()
-            if "sign in" in error_msg or "bot" in error_msg or "403" in error_msg:
-                 logger.warning(f"Initial extraction failed ({e}), retrying without cookies...")
-                 fallback_opts = opts.copy()
-                 if 'cookiefile' in fallback_opts:
-                     del fallback_opts['cookiefile']
-                 # Ensure android client is used in fallback (it should be already, but just in case)
-                 fallback_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
+            if any(s in error_msg for s in ["sign in", "bot", "403", "unsupported", "content is not available"]):
+                 logger.warning(f"Strategy 1 failed ({e}), trying Strategy 2: Android client without cookies...")
                  
-                 with yt_dlp.YoutubeDL(fallback_opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
+                 fallback_strategies = [
+                     {'youtube': {'player_client': ['android']}},
+                     {'youtube': {'player_client': ['mweb']}},
+                     {'youtube': {'player_client': ['ios']}},
+                 ]
+                 
+                 info = None
+                 last_err = e
+                 for strategy in fallback_strategies:
+                     logger.info(f"Retrying with client strategy: {strategy['youtube']['player_client']}")
+                     f_opts = opts.copy()
+                     if 'cookiefile' in f_opts:
+                         del f_opts['cookiefile']
+                     f_opts['extractor_args'] = strategy
+                     
+                     try:
+                         with yt_dlp.YoutubeDL(f_opts) as ydl:
+                            info = ydl.extract_info(url, download=False)
+                            if info:
+                                logger.info(f"Success with strategy: {strategy['youtube']['player_client']}")
+                                break
+                     except Exception as fe:
+                        logger.warning(f"Strategy {strategy['youtube']['player_client']} failed: {fe}")
+                        last_err = fe
+                 
+                 if not info:
+                     raise last_err
             else:
                 raise e
             
