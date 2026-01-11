@@ -390,66 +390,67 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
              logger.error(f"yt-dlp failed to extract info for {url}")
              raise HTTPException(status_code=404, detail="Video not found")
             
-            stream_url = info.get('url')
+        stream_url = info.get('url')
+        
+        if not stream_url:
+            formats = info.get('formats', [])
+            selected_format = None
             
-            if not stream_url:
-                formats = info.get('formats', [])
-                selected_format = None
-                
-                if not is_video:
-                    for fmt in formats:
-                        if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
-                            selected_format = fmt
-                            break
-                
-                if not selected_format:
-                    for fmt in formats:
-                        if fmt.get('url'):
-                            if is_video:
-                                if fmt.get('acodec') != 'none' and fmt.get('vcodec') != 'none':
-                                    selected_format = fmt
-                                    break
-                            else:
-                                if fmt.get('acodec') != 'none':
-                                    selected_format = fmt
-                                    break
-                
-                if not selected_format and formats:
-                    selected_format = formats[0]
-                
-                if not selected_format or not selected_format.get('url'):
-                    raise HTTPException(status_code=404, detail="No playable format found")
-                
-                stream_url = selected_format['url']
+            if not is_video:
+                for fmt in formats:
+                    if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
+                        selected_format = fmt
+                        break
+            
+            if not selected_format:
+                for fmt in formats:
+                    if fmt.get('url'):
+                        if is_video:
+                            if fmt.get('acodec') != 'none' and fmt.get('vcodec') != 'none':
+                                selected_format = fmt
+                                break
+                        else:
+                            if fmt.get('acodec') != 'none':
+                                selected_format = fmt
+                                break
+            
+            if not selected_format and formats:
+                selected_format = formats[0]
+            
+            if not selected_format or not selected_format.get('url'):
+                raise HTTPException(status_code=404, detail="No playable format found")
+            
+            stream_url = selected_format['url']
+        else:
+            selected_format = info
+        
+        logger.info(f"Streaming {'video' if is_video else 'audio'} from URL: {stream_url[:100]}...")
+        
+        # Stream with comprehensive headers
+        timeout = aiohttp.ClientTimeout(total=600 if is_video else 60, connect=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+        # Prepare headers for the final YouTube fetch
+            target_headers = selected_format.get('http_headers', {}).copy()
+            if not target_headers:
+                target_headers = {
+                    'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+                    'Accept': '*/*', 
+                }
+            
+            # Pass through the Range header if requested by the client
+            if client_headers and 'range' in {k.lower() for k in client_headers}:
+                range_val = next(v for k, v in client_headers.items() if k.lower() == 'range')
+                target_headers['Range'] = range_val
+                logger.info(f"Forwarding client range: {range_val}")
             else:
-                selected_format = info
+                target_headers['Range'] = 'bytes=0-'
             
-            logger.info(f"Streaming {'video' if is_video else 'audio'} from URL: {stream_url[:100]}...")
-            
-            # Stream with comprehensive headers
-            timeout = aiohttp.ClientTimeout(total=600 if is_video else 60, connect=15)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-            # Prepare headers for the final YouTube fetch
-                target_headers = selected_format.get('http_headers', {}).copy()
-                if not target_headers:
-                    target_headers = {
-                        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-                        'Accept': '*/*', 
-                    }
                 
-                # Pass through the Range header if requested by the client
-                if client_headers and 'range' in {k.lower() for k in client_headers}:
-                    range_val = next(v for k, v in client_headers.items() if k.lower() == 'range')
-                    target_headers['Range'] = range_val
-                    logger.info(f"Forwarding client range: {range_val}")
-                else:
-                    target_headers['Range'] = 'bytes=0-'
-                
-                async with session.get(
-                    stream_url,
-                    headers=target_headers,
-                    allow_redirects=True
-                ) as resp:
+            async with session.get(
+                stream_url,
+                headers=target_headers,
+                allow_redirects=True
+            ) as resp:
                     if resp.status not in [200, 206]:
                         err_text = await resp.text()
                         logger.error(f"YouTube fetch failed: {resp.status} - {err_text[:200]}")
