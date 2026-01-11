@@ -666,6 +666,22 @@ async def dashboard():
                 </div>
                 
                 <fieldset style="margin-top: 20px;">
+                    <legend>Test Streaming</legend>
+                    <div class="field-row">
+                        <label for="testVideoId">YouTube Video ID:</label>
+                        <input id="testVideoId" type="text" value="pEl3-0GHyoQ" style="width: 100px;">
+                    </div>
+                    <div style="margin-top: 10px;">
+                        <button onclick="runTest('audio')">Test Audio Stream</button>
+                        <button onclick="runTest('video')">Test Video Stream</button>
+                    </div>
+                    <div id="testStatus" class="auth-box hidden" style="margin-top: 10px; font-size: 11px;">
+                        <strong>Test Results:</strong>
+                        <ul id="testSteps" style="margin-top: 5px; padding-left: 20px;"></ul>
+                    </div>
+                </fieldset>
+
+                <fieldset style="margin-top: 20px;">
                     <legend>Troubleshooting</legend>
                     <p>1. Install the "Get cookies.txt LOCALLY" extension in Chrome/Edge.</p>
                     <p>2. Export cookies for youtube.com and paste them into "Sync Cookies" above.</p>
@@ -762,9 +778,52 @@ async def dashboard():
                              clearInterval(timer);
                              alert('Linking failed: ' + data.error);
                              window.location.reload();
-                        }}
+                         }}
                     }} catch (e) {{}}
                 }}, 2000);
+            }}
+
+            async function runTest(type) {{
+                const id = document.getElementById('testVideoId').value;
+                const statusBox = document.getElementById('testStatus');
+                const stepsList = document.getElementById('testSteps');
+                
+                if (!id) return alert('Enter a video ID!');
+                
+                statusBox.classList.remove('hidden');
+                stepsList.innerHTML = '<li>Running ' + type + ' test...</li>';
+                
+                try {{
+                    const resp = await fetch('/test/' + type + '/' + id);
+                    const data = await resp.json();
+                    
+                    stepsList.innerHTML = '';
+                    
+                    if (data.auth_method) {{
+                        const li = document.createElement('li');
+                        li.innerHTML = '<strong>Auth Method:</strong> ' + data.auth_method;
+                        stepsList.appendChild(li);
+                    }}
+                    
+                    data.steps.forEach(step => {{
+                        const li = document.createElement('li');
+                        let icon = step.status === 'success' ? '✅' : (step.status === 'failed' ? '❌' : '⏳');
+                        li.innerHTML = icon + ' ' + step.name + (step.error ? ': <span style="color:red">' + step.error + '</span>' : '');
+                        if (step.title) li.innerHTML += ' (' + step.title + ')';
+                        stepsList.appendChild(li);
+                    }});
+                    
+                    if (data.success) {{
+                        const li = document.createElement('li');
+                        li.style.color = 'green';
+                        li.style.fontWeight = 'bold';
+                        li.style.marginTop = '5px';
+                        li.innerText = 'OVERALL SUCCESS: Stream is reachable with current cookies!';
+                        stepsList.appendChild(li);
+                    }}
+                }} catch (e) {{
+                    stepsList.innerHTML += '<li style="color:red">Test failed to run: ' + e + '</li>';
+                }}
             }}
         </script>
     </body>
@@ -914,6 +973,88 @@ async def stream_video(video_id: str, request: Request):
     except Exception as e:
         logger.error(f"Error in stream_video: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/test/{test_type}/{video_id}")
+async def test_stream(test_type: str, video_id: str):
+    """Diagnose streaming issues and report detailed results to the dashboard"""
+    is_video = test_type == "video"
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    results = {
+        "video_id": video_id,
+        "type": test_type,
+        "steps": [],
+        "success": False
+    }
+    
+    try:
+        # Step 1: Info Extraction
+        results["steps"].append({"name": "Extraction", "status": "pending"})
+        opts = YDL_OPTS_VIDEO.copy() if is_video else YDL_OPTS_AUDIO.copy()
+        
+        auth_method = "None"
+        if os.path.exists(auth_state.manual_cookie_file):
+            opts['cookiefile'] = auth_state.manual_cookie_file
+            auth_method = "Manual Cookies"
+        elif os.path.exists(auth_state.auth_file):
+            opts['username'] = 'oauth2'
+            auth_method = "OAuth2"
+        elif COOKIE_FILE:
+            opts['cookiefile'] = COOKIE_FILE
+            auth_method = "Hardcoded Cookies"
+            
+        results["auth_method"] = auth_method
+        
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                results["steps"][-1].update({"status": "success", "title": info.get('title')})
+        except Exception as e:
+            results["steps"][-1].update({"status": "failed", "error": str(e)})
+            return results
+
+        # Step 2: URL Resolution
+        results["steps"].append({"name": "URL Resolution", "status": "pending"})
+        stream_url = info.get('url')
+        if not stream_url and info.get('formats'):
+            # Fallback to finding a format
+            formats = info.get('formats', [])
+            for fmt in formats:
+                if fmt.get('url'):
+                    if not is_video and fmt.get('acodec') != 'none':
+                        stream_url = fmt['url']
+                        break
+                    if is_video and fmt.get('acodec') != 'none' and fmt.get('vcodec') != 'none':
+                        stream_url = fmt['url']
+                        break
+            if not stream_url and formats:
+                stream_url = formats[0]['url']
+            
+        if not stream_url:
+            results["steps"][-1].update({"status": "failed", "error": "No stream URL found in metadata"})
+            return results
+        results["steps"][-1].update({"status": "success"})
+
+        # Step 3: Head Request (Bot check on final URL)
+        results["steps"].append({"name": "YouTube Connectivity", "status": "pending"})
+        cookies = auth_state.get_cookies_for_aiohttp()
+        target_headers = info.get('http_headers', {}).copy()
+        ua = target_headers.get('User-Agent', '')
+        if not ua or 'Googlebot' in ua or 'python' in ua.lower():
+             target_headers['User-Agent'] = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'
+        
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(cookies=cookies, timeout=timeout) as session:
+            async with session.get(stream_url, headers=target_headers) as resp:
+                if resp.status in [200, 206]:
+                    results["steps"][-1].update({"status": "success", "http_status": resp.status})
+                    results["success"] = True
+                else:
+                    results["steps"][-1].update({"status": "failed", "http_status": resp.status, "error": f"YouTube returned {resp.status}"})
+                    
+    except Exception as e:
+        results["steps"].append({"name": "System Error", "status": "failed", "error": str(e)})
+        
+    return results
 
 @app.get("/health")
 async def health():
