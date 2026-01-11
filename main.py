@@ -27,8 +27,36 @@ class AuthState:
         self.current_url = None
         self.is_linking = False
         self.last_error = None
-        self.auth_file = "/tmp/youtube_oauth.cache"
-        self.manual_cookie_file = "/tmp/manual_cookies.txt"
+        self.auth_file = '/tmp/yt-auth.json'
+        self.manual_cookie_file = '/tmp/manual_cookies.txt'
+        self.cache_dir = '/tmp/yt-cache'
+
+    def get_cookies_for_aiohttp(self):
+        """Parse Netscape/JSON cookies for aiohttp"""
+        cookies = {}
+        target = self.manual_cookie_file
+        if not os.path.exists(target):
+            return cookies
+            
+        try:
+            with open(target, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if not content:
+                    return cookies
+                if content.startswith('['):
+                    import json
+                    data = json.loads(content)
+                    for c in data:
+                        cookies[c['name']] = c['value']
+                else:
+                    for line in content.splitlines():
+                        if not line.startswith('#') and '\t' in line:
+                            parts = line.split('\t')
+                            if len(parts) >= 7:
+                                cookies[parts[5]] = parts[6].strip()
+        except Exception as e:
+            logger.error(f"Error parsing cookies for aiohttp: {e}")
+        return cookies
 
 auth_state = AuthState()
 
@@ -371,7 +399,7 @@ YDL_OPTS_AUDIO = {
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'extractor_args': {'youtube': {'player_client': ['tv', 'web', 'android']}},
+    'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
     'cache_dir': '/tmp/yt-cache'
 }
 
@@ -381,7 +409,7 @@ YDL_OPTS_VIDEO = {
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'extractor_args': {'youtube': {'player_client': ['tv', 'web', 'android']}},
+    'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
     'cache_dir': '/tmp/yt-cache'
 }
 
@@ -492,15 +520,17 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
         logger.info(f"Streaming {'video' if is_video else 'audio'} from URL: {stream_url[:100]}...")
         
         # Stream with comprehensive headers
-        timeout = aiohttp.ClientTimeout(total=600 if is_video else 60, connect=15)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-        # Prepare headers for the final YouTube fetch
+        timeout = aiohttp.ClientTimeout(total=1200 if is_video else 300, connect=30)
+        cookies = auth_state.get_cookies_for_aiohttp()
+        
+        async with aiohttp.ClientSession(timeout=timeout, cookies=cookies) as session:
+            # Prepare headers for the final YouTube fetch
             target_headers = selected_format.get('http_headers', {}).copy()
-            if not target_headers:
-                target_headers = {
-                    'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-                    'Accept': '*/*', 
-                }
+            
+            # Ensure a modern User-Agent if none exists or it's generic
+            ua = target_headers.get('User-Agent', '')
+            if not ua or 'Googlebot' in ua or 'python' in ua.lower():
+                 target_headers['User-Agent'] = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'
             
             # Pass through the Range header if requested by the client
             if client_headers and 'range' in {k.lower() for k in client_headers}:
@@ -510,7 +540,6 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
             else:
                 target_headers['Range'] = 'bytes=0-'
             
-                
             async with session.get(
                 stream_url,
                 headers=target_headers,
