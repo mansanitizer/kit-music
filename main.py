@@ -146,9 +146,18 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
                             detail=f"Failed to fetch from YouTube: {resp.status}"
                         )
                     
+                    logger.info(f"YouTube responded with {resp.status}, content-length: {resp.headers.get('Content-Length')}")
+                    
                     chunk_size = 65536 if is_video else 16384
+                    count = 0
                     async for chunk in resp.content.iter_chunked(chunk_size):
                         yield chunk
+                        count += 1
+                        if count == 1:
+                            logger.info("First chunk yielded successfully")
+                    
+                    if count == 0:
+                        logger.warning("No chunks were yielded from YouTube response body!")
                         
     except Exception as e:
         logger.error(f"Stream error: {str(e)}", exc_info=True)
