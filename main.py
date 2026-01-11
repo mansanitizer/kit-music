@@ -32,6 +32,17 @@ class AuthState:
 
 auth_state = AuthState()
 
+app = FastAPI(title="YouTube Audio Proxy")
+
+# CORS - allow Netlify domain
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Replace with your Netlify domain in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.post("/auth/update-cookies")
 async def update_cookies(request: Request):
     """Receive and save cookies from the dashboard"""
@@ -353,16 +364,6 @@ def setup_cookies():
 
 COOKIE_FILE = setup_cookies()
 
-app = FastAPI(title="YouTube Audio Proxy")
-
-# CORS - allow Netlify domain
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Replace with your Netlify domain in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # yt-dlp options (simplified for reliability with specific cookies)
 # yt-dlp options (simplified for reliability with specific cookies)
