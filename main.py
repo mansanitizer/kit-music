@@ -22,27 +22,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# yt-dlp options with aggressive anti-detection
+# yt-dlp options optimized for Android Music client (reliable without PO tokens)
 YDL_OPTS = {
-    'format': 'bestaudio/best',
+    'format': 'bestaudio*',  # More flexible format selection
     'quiet': True,
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    # Android Music user agent
+    'user_agent': 'com.google.android.apps.youtube.music/6.42.52 (Linux; U; Android 13; en_US)',
     'referer': 'https://www.youtube.com/',
     'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-us,en;q=0.5',
-        'Sec-Fetch-Mode': 'navigate',
+        'User-Agent': 'com.google.android.apps.youtube.music/6.42.52 (Linux; U; Android 13; en_US)',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate',
+        'X-YouTube-Client-Name': '3',
+        'X-YouTube-Client-Version': '18.11.34',
     },
-    # Anti-bot measures
+    # Use Android Music client - excellent for audio, no PO token required
     'extractor_args': {
         'youtube': {
-            'skip': ['dash', 'hls'],
-            'player_client': ['android', 'web'],
-            'player_skip': ['webpage', 'configs'],
+            'player_client': ['android_music', 'android'],
+            'player_skip': ['webpage'],
         }
     },
 }
@@ -57,39 +59,54 @@ async def stream_audio(url: str) -> AsyncIterator[bytes]:
             if not info:
                 raise HTTPException(status_code=404, detail="Video not found")
             
-            # Get the best audio format URL
-            formats = info.get('formats', [])
-            audio_format = None
+            # Try to get stream URL - iOS client may provide it directly
+            stream_url = info.get('url')
             
-            # Prefer audio-only formats
-            for fmt in formats:
-                if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
-                    audio_format = fmt
-                    break
-            
-            # Fallback to any format with audio
-            if not audio_format:
+            if not stream_url:
+                # Get the best audio format URL
+                formats = info.get('formats', [])
+                audio_format = None
+                
+                # Prefer audio-only formats
                 for fmt in formats:
-                    if fmt.get('acodec') != 'none':
+                    if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
                         audio_format = fmt
                         break
+                
+                # Fallback to any format with audio
+                if not audio_format:
+                    for fmt in formats:
+                        if fmt.get('acodec') != 'none':
+                            audio_format = fmt
+                            break
+                
+                # Last resort: use first format
+                if not audio_format and formats:
+                    audio_format = formats[0]
+                
+                if not audio_format or not audio_format.get('url'):
+                    raise HTTPException(status_code=404, detail="No playable audio format found")
+                
+                stream_url = audio_format['url']
             
-            if not audio_format or not audio_format.get('url'):
-                raise HTTPException(status_code=404, detail="No playable audio format found")
-            
-            stream_url = audio_format['url']
             logger.info(f"Streaming from URL: {stream_url[:100]}...")
             
-            # Stream the audio
-            async with aiohttp.ClientSession() as session:
+            # Stream the audio with comprehensive browser-like headers
+            timeout = aiohttp.ClientTimeout(total=30, connect=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(
                     stream_url,
                     headers={
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'User-Agent': 'com.google.android.apps.youtube.music/6.42.52 (Linux; U; Android 13; en_US)',
+                        'Accept': '*/*',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate',
                         'Range': 'bytes=0-',  # Support range requests
-                    }
+                    },
+                    allow_redirects=True
                 ) as resp:
                     if resp.status != 200 and resp.status != 206:
+                        logger.error(f"Stream fetch failed: {resp.status} - {await resp.text()}")
                         raise HTTPException(
                             status_code=resp.status,
                             detail=f"Failed to fetch stream: {resp.status}"
