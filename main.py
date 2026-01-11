@@ -404,6 +404,8 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
                     raise HTTPException(status_code=404, detail="No playable format found")
                 
                 stream_url = selected_format['url']
+            else:
+                selected_format = info
             
             logger.info(f"Streaming {'video' if is_video else 'audio'} from URL: {stream_url[:100]}...")
             
