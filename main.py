@@ -44,7 +44,7 @@ def setup_cookies():
                 
                 # Netscape spec: domain, include_subdomains, path, secure, expiry, name, value
                 include_subdomains = "TRUE" if domain.startswith('.') else "FALSE"
-                path = cookie.get('path', '/')
+                cookie_path = cookie.get('path', '/')
                 secure = "TRUE" if cookie.get('secure', False) else "FALSE"
                 
                 # Expiry: safe handling of missing or null expirationDate
@@ -55,7 +55,7 @@ def setup_cookies():
                 name = cookie.get('name', '')
                 value = cookie.get('value', '')
                 
-                f.write(f"{domain}\t{include_subdomains}\t{path}\t{secure}\t{expiry}\t{name}\t{value}\n")
+                f.write(f"{domain}\t{include_subdomains}\t{cookie_path}\t{secure}\t{expiry}\t{name}\t{value}\n")
         
         logger.info(f"Created Netscape format cookie file at {path}")
         return path
