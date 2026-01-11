@@ -77,12 +77,18 @@ app.add_middleware(
 )
 
 # yt-dlp options (simplified for reliability with specific cookies)
+# yt-dlp options (simplified for reliability with specific cookies)
 YDL_OPTS_AUDIO = {
     'format': 'bestaudio/best',
     'quiet': True,
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['ios'],
+        }
+    },
 }
 
 if COOKIE_FILE:
@@ -96,6 +102,11 @@ YDL_OPTS_VIDEO = {
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['ios'],
+        }
+    },
 }
 
 if COOKIE_FILE:
