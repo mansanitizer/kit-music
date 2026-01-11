@@ -414,7 +414,7 @@ YDL_OPTS_AUDIO = {
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'extractor_args': {'youtube': {'player_client': ['tv', 'ios', 'android']}},
+    'extractor_args': {'youtube': {'player_client': ['web', 'tv', 'ios']}},
     'cache_dir': '/tmp/yt-cache'
 }
 
@@ -424,7 +424,7 @@ YDL_OPTS_VIDEO = {
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'extractor_args': {'youtube': {'player_client': ['tv', 'ios', 'android']}},
+    'extractor_args': {'youtube': {'player_client': ['web', 'tv', 'ios']}},
     'cache_dir': '/tmp/yt-cache'
 }
 
@@ -468,14 +468,14 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
             logger.warning(f"Primary strategy failed ({e})")
             
             # The order of fallback is crucial: 
-            # 1. TV with cookies (most lenient for authenticated)
-            # 2. WEB with cookies (most flexible for formats)
+            # 1. WEB with cookies (User priority, best formats)
+            # 2. TV with cookies (Safest for auth)
             # 3. IOS with cookies
-            # 4. TV WITHOUT cookies (bypass IP-based cookie tainting)
+            # 4. TV WITHOUT cookies (Safe IP check)
             # 5. IOS WITHOUT cookies
             fallback_strategies = [
-                ({'youtube': {'player_client': ['tv']}}, True),
                 ({'youtube': {'player_client': ['web']}}, True),
+                ({'youtube': {'player_client': ['tv']}}, True),
                 ({'youtube': {'player_client': ['ios']}}, True),
                 ({'youtube': {'player_client': ['tv']}}, False),
                 ({'youtube': {'player_client': ['ios']}}, False),
@@ -1065,27 +1065,30 @@ async def test_stream(test_type: str, video_id: str):
         
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+                # Try to get info. If it fails due to format, we still want the format list.
+                try:
+                    info = ydl.extract_info(url, download=False)
+                except Exception as ee:
+                    if "format is not available" in str(ee).lower():
+                        # Force extraction of just the info without format restriction to see what IS there
+                        tmp_opts = opts.copy()
+                        tmp_opts['format'] = None
+                        info = ydl.extract_info(url, download=False)
+                        results["steps"][-1].update({"status": "warning", "note": "Primary format failed, but formats were found."})
+                    else:
+                        raise ee
+                        
                 results["steps"][-1].update({"status": "success", "title": info.get('title')})
                 
                 # Capture all formats for debugging
                 if info.get('formats'):
                     results["available_formats"] = [
-                        {"ext": f.get('ext'), "resolution": f.get('resolution'), "note": f.get('format_note')}
+                        {"id": f.get('format_id'), "ext": f.get('ext'), "res": f.get('resolution'), "note": f.get('format_note'), "acodec": f.get('acodec'), "vcodec": f.get('vcodec')}
                         for f in info['formats']
-                    ][:20]  # Top 20
+                    ]
         except Exception as e:
             results["steps"][-1].update({"status": "failed", "error": str(e)})
-            # If extraction failed, still try to see if a simple 'best' works
-            results["steps"].append({"name": "Format Fallback Check", "status": "pending"})
-            try:
-                opts['format'] = 'best'
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                    results["steps"][-1].update({"status": "success", "note": "Only generic 'best' format found"})
-            except:
-                results["steps"][-1].update({"status": "failed"})
-                return results
+            return results
 
         # Step 2: URL Resolution
         results["steps"].append({"name": "URL Resolution", "status": "pending"})
