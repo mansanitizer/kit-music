@@ -28,8 +28,29 @@ class AuthState:
         self.is_linking = False
         self.last_error = None
         self.auth_file = "/tmp/youtube_oauth.cache"
+        self.manual_cookie_file = "/tmp/manual_cookies.txt"
 
 auth_state = AuthState()
+
+@app.post("/auth/update-cookies")
+async def update_cookies(request: Request):
+    """Receive and save cookies from the dashboard"""
+    try:
+        content = await request.body()
+        text = content.decode('utf-8').strip()
+        
+        if not text:
+             raise HTTPException(status_code=400, detail="Empty cookie content")
+             
+        # Detect format and save
+        with open(auth_state.manual_cookie_file, "w") as f:
+            f.write(text)
+            
+        logger.info(f"Manual cookies updated. Saved to {auth_state.manual_cookie_file}")
+        return {"status": "success", "detail": "Cookies updated successfully"}
+    except Exception as e:
+        logger.error(f"Failed to update cookies: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 HARDCODED_COOKIES_JSON = '''[
 {
@@ -385,9 +406,10 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
         # Get video info
         opts = YDL_OPTS_VIDEO.copy() if is_video else YDL_OPTS_AUDIO.copy()
         
-        # Check for OAuth - this is more reliable for bot detection
-        # yt-dlp stores oauth tokens in the cache dir
-        if os.path.exists('/tmp/yt-cache'):
+        if os.path.exists(auth_state.manual_cookie_file):
+            logger.info("Using manual cookies for extraction")
+            opts['cookiefile'] = auth_state.manual_cookie_file
+        elif os.path.exists('/tmp/yt-cache'):
             opts['username'] = 'oauth2'
             logger.info("Using OAuth2 for extraction")
         
@@ -538,6 +560,7 @@ async def dashboard():
     # Check if we have auth or cookies
     has_cookies = COOKIE_FILE is not None
     has_oauth = os.path.exists(auth_state.auth_file)
+    has_manual = os.path.exists(auth_state.manual_cookie_file)
     
     html_content = f"""
     <!DOCTYPE html>
@@ -572,8 +595,12 @@ async def dashboard():
                 <fieldset>
                     <legend>Authentication Methods</legend>
                     <div class="field-row">
+                        <label>Manual Cookies:</label>
+                        <span>{ "ACTIVE (Recent Sync)" if has_manual else "NONE" }</span>
+                    </div>
+                    <div class="field-row">
                         <label>Hardcoded Cookies:</label>
-                        <span>{ "ACTIVE (Netscape format)" if has_cookies else "INACTIVE" }</span>
+                        <span>{ "FALLBACK ACTIVE" if has_cookies else "INACTIVE" }</span>
                     </div>
                     <div class="field-row">
                         <label>YouTube Account (OAuth2):</label>
@@ -582,8 +609,19 @@ async def dashboard():
                 </fieldset>
 
                 <div style="margin-top: 20px; display: flex; flex-wrap: wrap; justify-content: center;">
-                    <button onclick="startLinking()" id="linkBtn" class="btn-large">Link YouTube Account...</button>
+                    <button onclick="showCookieDialog()" class="btn-large">Sync Cookies manually...</button>
+                    <button onclick="startLinking()" id="linkBtn" class="btn-large">Link Account (OAuth)...</button>
                     <button onclick="window.location.reload()" class="btn-large">Refresh Status</button>
+                </div>
+
+                <div id="cookieDialog" class="hidden">
+                    <fieldset style="margin-top: 20px;">
+                        <legend>Cookie Sync</legend>
+                        <p>Paste your YouTube cookies here (Netscape format or JSON):</p>
+                        <textarea id="cookieInput" style="width: 100%; height: 100px; margin-bottom: 10px;" placeholder="# Netscape HTTP Cookie File... or [{...}]"></textarea>
+                        <button onclick="saveCookies()">Save Cookies</button>
+                        <button onclick="hideCookieDialog()">Cancel</button>
+                    </fieldset>
                 </div>
 
                 <div id="authDialog" class="hidden">
@@ -595,14 +633,15 @@ async def dashboard():
                             <p>2. Enter this code:</p>
                             <div class="code-text" id="authCode">---- ----</div>
                             <p>3. Complete the login on your phone/browser.</p>
-                            <p><i>Server will automatically link once you finish.</i></p>
+                            <p><i>Note: OAuth linking is currently unstable on some IPs.</i></p>
                         </div>
                     </fieldset>
                 </div>
                 
                 <fieldset style="margin-top: 20px;">
                     <legend>Troubleshooting</legend>
-                    <p>If you see "Sign in to confirm you're not a bot", use the Link Account button above.</p>
+                    <p>1. Install the "Get cookies.txt LOCALLY" extension in Chrome/Edge.</p>
+                    <p>2. Export cookies for youtube.com and paste them into "Sync Cookies" above.</p>
                 </fieldset>
             </div>
             <div class="status-bar">
@@ -613,31 +652,35 @@ async def dashboard():
         </div>
 
         <script>
-            async function startLinking() {{
-                const btn = document.getElementById('linkBtn');
-                const dialog = document.getElementById('authDialog');
-                const msg = document.getElementById('authMsg');
-                const codeBox = document.getElementById('authCodeBox');
-                
-                btn.disabled = true;
-                dialog.classList.remove('hidden');
-                
-                try {{
-                    const resp = await fetch('/auth/link');
-                    const data = await resp.json();
-                    
-                    if (data.status === 'linking' || data.status === 'started') {{
-                         pollStatus();
-                    }} else {{
-                        alert('Error: ' + data.detail);
-                        btn.disabled = false;
-                    }}
-                }} catch (e) {{
-                    alert('Network error: ' + e);
-                    btn.disabled = false;
-                }}
-            }}
+            function showCookieDialog() {
+                document.getElementById('cookieDialog').classList.remove('hidden');
+                document.getElementById('authDialog').classList.add('hidden');
+            }
+            function hideCookieDialog() {
+                document.getElementById('cookieDialog').classList.add('hidden');
+            }
 
+            async function saveCookies() {
+                const text = document.getElementById('cookieInput').value;
+                if (!text.trim()) return alert('Paste some cookies first!');
+                
+                try {
+                    const resp = await fetch('/auth/update-cookies', {
+                        method: 'POST',
+                        body: text
+                    });
+                    const data = await resp.json();
+                    if (data.status === 'success') {
+                        alert('Cookies updated! Streaming should work now.');
+                        window.location.reload();
+                    } else {
+                        alert('Error: ' + data.detail);
+                    }
+                } catch (e) {
+                    alert('Network error: ' + e);
+                }
+            }
+            
             async function pollStatus() {{
                 const msg = document.getElementById('authMsg');
                 const codeBox = document.getElementById('authCodeBox');
