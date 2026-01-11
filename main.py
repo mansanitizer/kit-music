@@ -14,13 +14,261 @@ import tempfile
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+HARDCODED_COOKIES_JSON = '''[
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1802714924.791868,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "__Secure-1PAPISID",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "g8fLy06O7817f4d7/ABHkZWPdhHhDBuM2E",
+    "id": 1
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1802714924.79222,
+    "hostOnly": false,
+    "httpOnly": true,
+    "name": "__Secure-1PSID",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "g.a0005gihkaUJo5dyQuclklQzrGKtBKI8oEluGV0M86xSATX56OK3LFAMCy_g5w4jqYUruR6FIgACgYKAY4SARASFQHGX2MidpDYZ0fleISH4gs-IUgWNxoVAUF8yKroYt1pFag31sK0k5t93ZI50076",
+    "id": 2
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1799692665.905651,
+    "hostOnly": false,
+    "httpOnly": true,
+    "name": "__Secure-1PSIDCC",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "AKEyXzW9DrCQF5t2TcTChPuNjEHsmjSHWqad30xcH6iMDvfIfShUGqj4S4-NHwucJ_Flz1qrpA",
+    "id": 3
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1799692665.751107,
+    "hostOnly": false,
+    "httpOnly": true,
+    "name": "__Secure-1PSIDTS",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "sidts-CjQB7I_69E_GoIAyZQTH5t6U8Ljj11_hJZl7vg4KRKDUiCOkLKAzi9KPjgaz7UAbdxr2-wJgEAA",
+    "id": 4
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1802714924.791905,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "__Secure-3PAPISID",
+    "path": "/",
+    "sameSite": "no_restriction",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "g8fLy06O7817f4d7/ABHkZWPdhHhDBuM2E",
+    "id": 5
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1802714924.792271,
+    "hostOnly": false,
+    "httpOnly": true,
+    "name": "__Secure-3PSID",
+    "path": "/",
+    "sameSite": "no_restriction",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "g.a0005gihkaUJo5dyQuclklQzrGKtBKI8oEluGV0M86xSATX56OK3eZfahOGsiEkjn9H4b8sC5wACgYKAXMSARASFQHGX2MiOkRDDpW8e2sFRo8HBKIV2xoVAUF8yKqdLJUFRs9rko2TT0NebLe90076",
+    "id": 6
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1799692665.905799,
+    "hostOnly": false,
+    "httpOnly": true,
+    "name": "__Secure-3PSIDCC",
+    "path": "/",
+    "sameSite": "no_restriction",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "AKEyXzXOzHWheZkH4fxaVVQe7LqFxFOU2laHFHcG5myxpWtXy_EjUUA-rEPvfEFiah812jEV2A",
+    "id": 7
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1799692665.753681,
+    "hostOnly": false,
+    "httpOnly": true,
+    "name": "__Secure-3PSIDTS",
+    "path": "/",
+    "sameSite": "no_restriction",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "sidts-CjQB7I_69E_GoIAyZQTH5t6U8Ljj11_hJZl7vg4KRKDUiCOkLKAzi9KPjgaz7UAbdxr2-wJgEAA",
+    "id": 8
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1775056888,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "_gcl_au",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": false,
+    "storeId": "0",
+    "value": "1.1.1124808925.1767280888",
+    "id": 9
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1802714924.791798,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "APISID",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": false,
+    "storeId": "0",
+    "value": "MubTzyJ2vS7TmZsd/At-qJt6WZWVQg8aVd",
+    "id": 10
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1802714924.791648,
+    "hostOnly": false,
+    "httpOnly": true,
+    "name": "HSID",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": false,
+    "storeId": "0",
+    "value": "AJ-DtCRFRt8K37Xic",
+    "id": 11
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1802714933.434108,
+    "hostOnly": false,
+    "httpOnly": true,
+    "name": "LOGIN_INFO",
+    "path": "/",
+    "sameSite": "no_restriction",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "AFmmF2swRAIgGYKqjEpflE_momHako0Dyff3b5YgmcnHEEqIqDzyhAsCIEmB55J6vNtVMk0vNENvtUlKabpjdoCeFJohLzbDONyh:QUQ3MjNmeW1WZW45VVhaT3FhVmlMU1FfTHZoYWtxcm5ueXhRQ2l2X1RoRmFMa21wMkpBTmNBTzFKeFp1eVZlajVVbE93ZWh3cmdXTlEyQUNKTFVNNEs4MUlDbFdjYzZfdWhZcTRwcU1yekNwZHQ3UHlRMDZ1dXlsQnlVQ1BzOGg2MmJIYXM0UWVTbVlMMmI5NGZOWnM0anZOVVlrRTRRY0N3",
+    "id": 12
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1802715075.928989,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "PREF",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "f6=40000000&f7=100&tz=Asia.Calcutta&repeat=NONE&f4=4000000&f5=30000",
+    "id": 13
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1802714924.791832,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "SAPISID",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "g8fLy06O7817f4d7/ABHkZWPdhHhDBuM2E",
+    "id": 14
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1802714924.792142,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "SID",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": false,
+    "storeId": "0",
+    "value": "g.a0005gihkaUJo5dyQuclklQzrGKtBKI8oEluGV0M86xSATX56OK3npoU3OLO0QBenuslLuEOmAACgYKAfkSARASFQHGX2Mi_CbHVo_HKMPudT7rNN3a-RoVAUF8yKoNxPop8qXKKa_Sd0AiWVXe0076",
+    "id": 15
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1799692665.90547,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "SIDCC",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": false,
+    "storeId": "0",
+    "value": "AKEyXzW3bo4L2nm18QZLHjJzQ92fFz1uvfvxjQjr8X0DmvsJU4FkDWaQRzAHrTpNX8gFZ3I0jw",
+    "id": 16
+},
+{
+    "domain": ".youtube.com",
+    "expirationDate": 1802714924.79176,
+    "hostOnly": false,
+    "httpOnly": true,
+    "name": "SSID",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "A350PAE68UeXO0U1f",
+    "id": 17
+}
+]'''
+
 def setup_cookies():
-    """Setup cookies from environment variable, converting JSON to Netscape format"""
-    cookies_env = os.environ.get('YOUTUBE_COOKIES')
+    """Setup cookies from hardcoded JSON or environment variable, converting to Netscape format"""
+    # Prioritize hardcoded cookies as requested for debugging
+    cookies_env = HARDCODED_COOKIES_JSON
+    
     if not cookies_env:
-        logger.error("MISSING: YOUTUBE_COOKIES environment variable is not set!")
+        cookies_env = os.environ.get('YOUTUBE_COOKIES')
+        
+    if not cookies_env:
+        logger.error("MISSING: YOUTUBE_COOKIES environment variable and HARDCODED_COOKIES_JSON are not set!")
         # Log all keys to help debug
         keys = list(os.environ.keys())
         # Mask sensitive keys
@@ -84,17 +332,13 @@ app.add_middleware(
 
 # yt-dlp options (simplified for reliability with specific cookies)
 # yt-dlp options (simplified for reliability with specific cookies)
+# yt-dlp options (simplified for reliability with specific cookies)
 YDL_OPTS_AUDIO = {
     'format': 'bestaudio/best',
     'quiet': True,
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['tv'],
-        }
-    },
 }
 
 if COOKIE_FILE:
@@ -108,11 +352,6 @@ YDL_OPTS_VIDEO = {
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['tv'],
-        }
-    },
 }
 
 if COOKIE_FILE:
