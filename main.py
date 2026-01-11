@@ -414,7 +414,7 @@ YDL_OPTS_AUDIO = {
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'extractor_args': {'youtube': {'player_client': ['web', 'tv', 'ios']}},
+    'extractor_args': {'youtube': {'player_client': ['android', 'web', 'tv'], 'skip': ['hls', 'dash']}},
     'cache_dir': '/tmp/yt-cache'
 }
 
@@ -424,7 +424,7 @@ YDL_OPTS_VIDEO = {
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'extractor_args': {'youtube': {'player_client': ['web', 'tv', 'ios']}},
+    'extractor_args': {'youtube': {'player_client': ['android', 'web', 'tv'], 'skip': ['hls', 'dash']}},
     'cache_dir': '/tmp/yt-cache'
 }
 
@@ -467,19 +467,19 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
             error_msg = str(e).lower()
             logger.warning(f"Primary strategy failed ({e})")
             
-            # The order of fallback is crucial: 
-            # 1. WEB with cookies (User priority, best formats)
-            # 2. TV with cookies (Safest for auth)
-            # 3. IOS with cookies
-            # 4. TV WITHOUT cookies (Safe IP check)
-            # 5. IOS WITHOUT cookies
+            # The order of fallback is crucial for data-center IPs: 
+            # 1. ANDROID with cookies (Current best balance)
+            # 2. WEB with cookies (Most formats)
+            # 3. TV with cookies (Safest for auth)
+            # 4. ANDROID WITHOUT cookies
+            # 5. TV WITHOUT cookies
             fallback_strategies = [
+                ({'youtube': {'player_client': ['android']}}, True),
                 ({'youtube': {'player_client': ['web']}}, True),
                 ({'youtube': {'player_client': ['tv']}}, True),
-                ({'youtube': {'player_client': ['ios']}}, True),
+                ({'youtube': {'player_client': ['android']}}, False),
                 ({'youtube': {'player_client': ['tv']}}, False),
-                ({'youtube': {'player_client': ['ios']}}, False),
-                ({'youtube': {'player_client': ['mweb']}}, False),
+                ({'youtube': {'player_client': ['mweb', 'ios']}}, False),
             ]
             
             info = None
@@ -680,14 +680,35 @@ async def dashboard():
                 <div id="cookieDialog" class="hidden">
                     <fieldset style="margin-top: 20px;">
                         <legend>Cookie Sync</legend>
-                        <p>1. Paste your <strong>User-Agent</strong> from your browser:</p>
-                        <input id="uaInput" type="text" style="width: 100%; margin-bottom: 10px;" placeholder="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)...">
+                        <div style="background: #ffffcc; padding: 5px; border: 1px solid #999; margin-bottom: 10px; font-size: 11px;">
+                            <strong>Pro Tip:</strong> Use the <strong>Login Assistant</strong> below to sync automatically from YouTube.
+                        </div>
                         
-                        <p>2. Paste your <strong>YouTube Cookies</strong> (Netscape or JSON):</p>
-                        <textarea id="cookieInput" style="width: 100%; height: 100px; margin-bottom: 10px;" placeholder="# Netscape HTTP Cookie File... or [{...}]"></textarea>
+                        <p>1. User-Agent:</p>
+                        <input id="uaInput" type="text" style="width: 100%; margin-bottom: 10px;" placeholder="Mozilla/5.0...">
+                        
+                        <p>2. Cookies:</p>
+                        <textarea id="cookieInput" style="width: 100%; height: 100px; margin-bottom: 10px;" placeholder="# Netscape..."></textarea>
                         
                         <button onclick="saveCookies()">Save & Sync</button>
                         <button onclick="hideCookieDialog()">Cancel</button>
+
+                        <hr>
+                        <strong>Login Assistant:</strong>
+                        <p style="font-size: 10px;">Copy the code below, go to <a href="https://www.youtube.com" target="_blank">YouTube.com</a>, open Console (F12), paste and enter.</p>
+                        <textarea readonly style="width: 100%; height: 60px; font-family: monospace; font-size: 9px;" onclick="this.select()">
+(async () => {{
+  const cookies = document.cookie;
+  const ua = navigator.userAgent;
+  const resp = await fetch('${{request.url.origin}}/auth/update-cookies', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ cookies, ua }})
+  }});
+  const res = await resp.json();
+  alert(res.status === 'success' ? '🚀 Sync Success! Refresh dashboard.' : '❌ Sync Failed');
+}})();
+                        </textarea>
                     </fieldset>
                 </div>
 
@@ -1102,47 +1123,45 @@ async def test_stream(test_type: str, video_id: str):
             
         results["auth_method"] = auth_method
         
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                # Try to get info. If it fails due to format, we still want the format list.
+                # Try to get info. Use a simple 'best' format first to avoid "format not available" loop in discovery
                 try:
-                    info = ydl.extract_info(url, download=False)
-                except Exception as ee:
-                    err_str = str(ee).lower()
-                    if "format is not available" in err_str or "no format" in err_str:
-                        # Force extraction of just the info WITHOUT format restriction to see what IS there
-                        tmp_opts = opts.copy()
-                        tmp_opts['format'] = None  # Reset format to get everything
-                        try:
-                            info = ydl.extract_info(url, download=False)
-                            results["steps"][-1].update({"status": "warning", "note": "Primary format selector failed, forced full format list discovery."})
-                        except Exception as ignore_err:
-                            raise ee # Re-raise original error if even basic extraction fails
-                    else:
-                        raise ee
+                    # Clear format temporarily for discovery
+                    meta_opts = opts.copy()
+                    meta_opts['format'] = None 
+                    with yt_dlp.YoutubeDL(meta_opts) as ydl_meta:
+                        info = ydl_meta.extract_info(url, download=False)
+                        results["steps"][-1].update({"status": "success", "title": info.get('title')})
                         
-                results["steps"][-1].update({"status": "success", "title": info.get('title')})
-                
-                # Capture all formats for debugging
-                formats = info.get('formats', [])
-                if formats:
-                    results["available_formats"] = [
-                        {
-                            "id": f.get('format_id'), 
-                            "ext": f.get('ext'), 
-                            "res": f.get('resolution') or f.get('format_note'), 
-                            "note": f.get('format_note'), 
-                            "acodec": f.get('acodec'), 
-                            "vcodec": f.get('vcodec')
-                        }
-                        for f in formats
-                    ]
-                else:
-                    results["available_formats"] = []
-                    logger.warning(f"Extraction succeeded for {url} but 'formats' list is empty!")
-        except Exception as e:
-            results["steps"][-1].update({"status": "failed", "error": str(e)})
-            return results
+                        # Capture all formats for debugging
+                        formats = info.get('formats', [])
+                        if formats:
+                            results["available_formats"] = [
+                                {
+                                    "id": f.get('format_id'), 
+                                    "ext": f.get('ext'), 
+                                    "res": f.get('resolution') or f.get('format_note'), 
+                                    "note": f.get('format_note'), 
+                                    "acodec": f.get('acodec') or 'none',
+                                    "vcodec": f.get('vcodec') or 'none'
+                                }
+                                for f in formats
+                            ]
+                        else:
+                            results["available_formats"] = []
+                            
+                except Exception as ee:
+                    results["steps"][-1].update({"status": "failed", "error": str(ee)})
+                    return results
+
+                # Now check if the actual format selection works
+                results["steps"].append({"name": "Format Selection Check", "status": "pending"})
+                try:
+                    with yt_dlp.YoutubeDL(opts) as ydl_real:
+                         ydl_real.extract_info(url, download=False)
+                         results["steps"][-1].update({"status": "success"})
+                except Exception as fe:
+                     results["steps"][-1].update({"status": "failed", "error": str(fe)})
+                     # Don't return, continue to connectivity check if we have a URL from info
 
         # Step 2: URL Resolution
         results["steps"].append({"name": "URL Resolution", "status": "pending"})
