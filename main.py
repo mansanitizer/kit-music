@@ -6,6 +6,7 @@ import asyncio
 import logging
 from typing import AsyncIterator
 import aiohttp
+from aiohttp.client_exceptions import ClientPayloadError
 
 import os
 import json
@@ -19,7 +20,12 @@ def setup_cookies():
     """Setup cookies from environment variable, converting JSON to Netscape format"""
     cookies_env = os.environ.get('YOUTUBE_COOKIES')
     if not cookies_env:
-        logger.warning("YOUTUBE_COOKIES environment variable not found")
+        logger.error("MISSING: YOUTUBE_COOKIES environment variable is not set!")
+        # Log all keys to help debug
+        keys = list(os.environ.keys())
+        # Mask sensitive keys
+        safe_keys = [k for k in keys if not any(s in k.lower() for s in ['key', 'secret', 'token', 'pass'])]
+        logger.info(f"Available environment variables (keys only): {', '.join(safe_keys)}")
         return None
         
     try:
@@ -206,11 +212,19 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
                     
                     chunk_size = 65536 if is_video else 16384
                     count = 0
-                    async for chunk in resp.content.iter_chunked(chunk_size):
-                        yield chunk
-                        count += 1
-                        if count == 1:
-                            logger.info("First chunk yielded successfully")
+                    try:
+                        async for chunk in resp.content.iter_chunked(chunk_size):
+                            yield chunk
+                            count += 1
+                            if count == 1:
+                                logger.info("First chunk yielded successfully")
+                    except ClientPayloadError as e:
+                        logger.warning(f"Stream interrupted (ClientPayloadError): {e}")
+                        # Don't re-raise, just stop yielding
+                        return
+                    except Exception as e:
+                        logger.error(f"Stream error during iteration: {e}")
+                        raise e
                     
                     if count == 0:
                         logger.warning("No chunks were yielded from YouTube response body!")
