@@ -363,17 +363,32 @@ if COOKIE_FILE:
 async def stream_content(url: str, is_video: bool = False, client_headers: dict = None) -> AsyncIterator[bytes]:
     """Stream audio or video chunks from YouTube URL"""
     try:
-        opts = YDL_OPTS_VIDEO if is_video else YDL_OPTS_AUDIO
-        selected_format = None
-        
         # Get video info
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            logger.info(f"Extracting info for {url} (video={is_video})")
-            info = ydl.extract_info(url, download=False)
+        opts = YDL_OPTS_VIDEO if is_video else YDL_OPTS_AUDIO
+        
+        try:
+             with yt_dlp.YoutubeDL(opts) as ydl:
+                logger.info(f"Extracting info for {url} (video={is_video})")
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            # Fallback: Try without cookies if we get a "Sign in" or "Bot" error
+            error_msg = str(e).lower()
+            if "sign in" in error_msg or "bot" in error_msg or "403" in error_msg:
+                 logger.warning(f"Initial extraction failed ({e}), retrying without cookies...")
+                 fallback_opts = opts.copy()
+                 if 'cookiefile' in fallback_opts:
+                     del fallback_opts['cookiefile']
+                 # Ensure android client is used in fallback (it should be already, but just in case)
+                 fallback_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
+                 
+                 with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+            else:
+                raise e
             
-            if not info:
-                logger.error(f"yt-dlp failed to extract info for {url}")
-                raise HTTPException(status_code=404, detail="Video not found")
+        if not info:
+             logger.error(f"yt-dlp failed to extract info for {url}")
+             raise HTTPException(status_code=404, detail="Video not found")
             
             stream_url = info.get('url')
             
