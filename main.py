@@ -652,34 +652,59 @@ async def dashboard():
         </div>
 
         <script>
-            function showCookieDialog() {
+            async function startLinking() {{
+                const btn = document.getElementById('linkBtn');
+                const dialog = document.getElementById('authDialog');
+                const msg = document.getElementById('authMsg');
+                const codeBox = document.getElementById('authCodeBox');
+                
+                btn.disabled = true;
+                dialog.classList.remove('hidden');
+                document.getElementById('cookieDialog').classList.add('hidden');
+                
+                try {{
+                    const resp = await fetch('/auth/link');
+                    const data = await resp.json();
+                    
+                    if (data.status === 'linking' || data.status === 'started') {{
+                         pollStatus();
+                    }} else {{
+                        alert('Error: ' + data.detail);
+                        btn.disabled = false;
+                    }}
+                }} catch (e) {{
+                    alert('Network error: ' + e);
+                    btn.disabled = false;
+                }}
+            }}
+            function showCookieDialog() {{
                 document.getElementById('cookieDialog').classList.remove('hidden');
                 document.getElementById('authDialog').classList.add('hidden');
-            }
-            function hideCookieDialog() {
+            }}
+            function hideCookieDialog() {{
                 document.getElementById('cookieDialog').classList.add('hidden');
-            }
+            }}
 
-            async function saveCookies() {
+            async function saveCookies() {{
                 const text = document.getElementById('cookieInput').value;
                 if (!text.trim()) return alert('Paste some cookies first!');
                 
-                try {
-                    const resp = await fetch('/auth/update-cookies', {
+                try {{
+                    const resp = await fetch('/auth/update-cookies', {{
                         method: 'POST',
                         body: text
-                    });
+                    }});
                     const data = await resp.json();
-                    if (data.status === 'success') {
+                    if (data.status === 'success') {{
                         alert('Cookies updated! Streaming should work now.');
                         window.location.reload();
-                    } else {
+                    }} else {{
                         alert('Error: ' + data.detail);
-                    }
-                } catch (e) {
+                    }}
+                }} catch (e) {{
                     alert('Network error: ' + e);
-                }
-            }
+                }}
+            }}
             
             async function pollStatus() {{
                 const msg = document.getElementById('authMsg');
