@@ -29,7 +29,17 @@ class AuthState:
         self.last_error = None
         self.auth_file = '/tmp/yt-auth.json'
         self.manual_cookie_file = '/tmp/manual_cookies.txt'
+        self.manual_ua_file = '/tmp/manual_ua.txt'
         self.cache_dir = '/tmp/yt-cache'
+
+    def get_manual_ua(self):
+        """Read saved User-Agent"""
+        if os.path.exists(self.manual_ua_file):
+            try:
+                with open(self.manual_ua_file, 'r') as f:
+                    return f.read().strip()
+            except: pass
+        return None
 
     def get_cookies_for_aiohttp(self):
         """Parse Netscape/JSON cookies for aiohttp"""
@@ -73,23 +83,28 @@ app.add_middleware(
 
 @app.post("/auth/update-cookies")
 async def update_cookies(request: Request):
-    """Receive and save cookies from the dashboard"""
+    """Receive and save cookies and UA from the dashboard"""
     try:
-        content = await request.body()
-        text = content.decode('utf-8').strip()
+        data = await request.json()
+        cookies = data.get('cookies', '').strip()
+        ua = data.get('ua', '').strip()
         
-        if not text:
-             raise HTTPException(status_code=400, detail="Empty cookie content")
-             
-        # Detect format and save
-        with open(auth_state.manual_cookie_file, "w") as f:
-            f.write(text)
+        # Save cookies
+        with open(auth_state.manual_cookie_file, 'w') as f:
+            f.write(cookies)
+        
+        # Save User-Agent
+        if ua:
+            with open(auth_state.manual_ua_file, 'w') as f:
+                f.write(ua)
+        elif os.path.exists(auth_state.manual_ua_file):
+            os.remove(auth_state.manual_ua_file)
             
-        logger.info(f"Manual cookies updated. Saved to {auth_state.manual_cookie_file}")
-        return {"status": "success", "detail": "Cookies updated successfully"}
+        logger.info(f"Manual cookies updated (UA provided: {bool(ua)})")
+        return {"status": "success"}
     except Exception as e:
-        logger.error(f"Failed to update cookies: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error updating cookies: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 HARDCODED_COOKIES_JSON = '''[
 {
@@ -449,11 +464,13 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
             
             # The order of fallback is crucial: 
             # 1. TV with cookies (most lenient for authenticated)
-            # 2. IOS with cookies
-            # 3. TV WITHOUT cookies (bypass IP-based cookie tainting)
-            # 4. IOS WITHOUT cookies
+            # 2. WEB with cookies (most flexible for formats)
+            # 3. IOS with cookies
+            # 4. TV WITHOUT cookies (bypass IP-based cookie tainting)
+            # 5. IOS WITHOUT cookies
             fallback_strategies = [
                 ({'youtube': {'player_client': ['tv']}}, True),
+                ({'youtube': {'player_client': ['web']}}, True),
                 ({'youtube': {'player_client': ['ios']}}, True),
                 ({'youtube': {'player_client': ['tv']}}, False),
                 ({'youtube': {'player_client': ['ios']}}, False),
@@ -532,15 +549,18 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
         # Stream with comprehensive headers
         timeout = aiohttp.ClientTimeout(total=1200 if is_video else 300, connect=30)
         cookies = auth_state.get_cookies_for_aiohttp()
+        manual_ua = auth_state.get_manual_ua()
         
         async with aiohttp.ClientSession(timeout=timeout, cookies=cookies) as session:
             # Prepare headers for the final YouTube fetch
             target_headers = selected_format.get('http_headers', {}).copy()
             
-            # Ensure a modern User-Agent if none exists or it's generic
-            ua = target_headers.get('User-Agent', '')
+            # Use manual UA if available, otherwise ensure a modern UA
+            ua = manual_ua or target_headers.get('User-Agent', '')
             if not ua or 'Googlebot' in ua or 'python' in ua.lower():
                  target_headers['User-Agent'] = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'
+            else:
+                 target_headers['User-Agent'] = ua
             
             # Pass through the Range header if requested by the client
             if client_headers and 'range' in {k.lower() for k in client_headers}:
@@ -654,9 +674,13 @@ async def dashboard():
                 <div id="cookieDialog" class="hidden">
                     <fieldset style="margin-top: 20px;">
                         <legend>Cookie Sync</legend>
-                        <p>Paste your YouTube cookies here (Netscape format or JSON):</p>
+                        <p>1. Paste your <strong>User-Agent</strong> from your browser:</p>
+                        <input id="uaInput" type="text" style="width: 100%; margin-bottom: 10px;" placeholder="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)...">
+                        
+                        <p>2. Paste your <strong>YouTube Cookies</strong> (Netscape or JSON):</p>
                         <textarea id="cookieInput" style="width: 100%; height: 100px; margin-bottom: 10px;" placeholder="# Netscape HTTP Cookie File... or [{...}]"></textarea>
-                        <button onclick="saveCookies()">Save Cookies</button>
+                        
+                        <button onclick="saveCookies()">Save & Sync</button>
                         <button onclick="hideCookieDialog()">Cancel</button>
                     </fieldset>
                 </div>
@@ -752,17 +776,19 @@ async def dashboard():
             }}
 
             async function saveCookies() {{
-                const text = document.getElementById('cookieInput').value;
-                if (!text.trim()) return alert('Paste some cookies first!');
+                const cookies = document.getElementById('cookieInput').value;
+                const ua = document.getElementById('uaInput').value;
+                if (!cookies.trim()) return alert('Paste some cookies first!');
                 
                 try {{
                     const resp = await fetch('/auth/update-cookies', {{
                         method: 'POST',
-                        body: text
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ cookies, ua }})
                     }});
                     const data = await resp.json();
                     if (data.status === 'success') {{
-                        alert('Cookies updated! Streaming should work now.');
+                        alert('Auth updated! Stream tests recommended.');
                         window.location.reload();
                     }} else {{
                         alert('Error: ' + data.detail);
