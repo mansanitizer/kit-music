@@ -319,43 +319,83 @@ YDL_OPTS_AUDIO = {
     'extractor_args': {'youtube': {'player_client': ['android']}},
 }
 
-if COOKIE_FILE:
-    YDL_OPTS_AUDIO['cookiefile'] = COOKIE_FILE
+# if COOKIE_FILE:
+#     YDL_OPTS_AUDIO['cookiefile'] = COOKIE_FILE
 
 async def check_stream():
     # A video ID that failed in user logs
-    url = "https://www.youtube.com/watch?v=FATTzbm78cc"
+    url = "https://www.youtube.com/watch?v=ygsLpOwufoM"
     
     print(f"Attempting to extract: {url}")
     
     try:
-        with yt_dlp.YoutubeDL(YDL_OPTS_AUDIO) as ydl:
-            logger.info(f"Extracting info for {url}")
-            info = ydl.extract_info(url, download=False)
-            
-            selected_format = None
-            stream_url = info.get('url')
-            
-            if stream_url:
-                selected_format = info
+        try:
+             with yt_dlp.YoutubeDL(YDL_OPTS_AUDIO) as ydl:
+                logger.info(f"Extracting info for {url}")
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            # Fallback chain: Try different clients without cookies if we get a "Sign in" or "Bot" error
+            error_msg = str(e).lower()
+            if any(s in error_msg for s in ["sign in", "bot", "403", "unsupported", "content is not available"]):
+                 logger.warning(f"Strategy 1 failed ({e}), trying Fallback Strategies...")
+                 
+                 fallback_strategies = [
+                     {'youtube': {'player_client': ['android']}},
+                     {'youtube': {'player_client': ['mweb']}},
+                     {'youtube': {'player_client': ['ios']}},
+                 ]
+                 
+                 info = None
+                 last_err = e
+                 for strategy in fallback_strategies:
+                     logger.info(f"Retrying with client strategy: {strategy['youtube']['player_client']}")
+                     f_opts = YDL_OPTS_AUDIO.copy()
+                     if 'cookiefile' in f_opts:
+                         del f_opts['cookiefile']
+                     f_opts['extractor_args'] = strategy
+                     
+                     try:
+                         with yt_dlp.YoutubeDL(f_opts) as ydl:
+                            info = ydl.extract_info(url, download=False)
+                            if info:
+                                logger.info(f"Success with strategy: {strategy['youtube']['player_client']}")
+                                break
+                     except Exception as fe:
+                        logger.warning(f"Strategy {strategy['youtube']['player_client']} failed: {fe}")
+                        last_err = fe
+                 
+                 if not info:
+                     raise last_err
             else:
-                formats = info.get('formats', [])
-                selected_format = None
-                for fmt in formats:
-                    if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
-                        selected_format = fmt
-                        break
-                if not selected_format and formats:
-                    selected_format = formats[0]
-                
-                if selected_format:
-                     stream_url = selected_format.get('url')
+                raise e
 
-            if not stream_url:
-                print("Failed to find stream URL")
-                return
+        if not info:
+            print("Failed to find info")
+            return
+            
+        selected_format = None
+        stream_url = info.get('url')
+        
+        if stream_url:
+            selected_format = info
+        else:
+            formats = info.get('formats', [])
+            selected_format = None
+            for fmt in formats:
+                if fmt.get('acodec') != 'none' and fmt.get('vcodec') == 'none':
+                    selected_format = fmt
+                    break
+            if not selected_format and formats:
+                selected_format = formats[0]
+            
+            if selected_format:
+                 stream_url = selected_format.get('url')
 
-            print(f"Stream URL obtained: {stream_url[:50]}...")
+        if not stream_url:
+            print("Failed to find stream URL")
+            return
+
+        print(f"Stream URL obtained: {stream_url[:50]}...")
             
             # Now try to FETCH it to see if we get 403
             # We must use similar headers to main.py
