@@ -54,12 +54,20 @@ YDL_OPTS_VIDEO = {
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'user_agent': 'com.google.android.youtube/18.33.38 (Linux; U; Android 11) gzip',
     'referer': 'https://www.youtube.com/',
     'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'com.google.android.youtube/18.33.38 (Linux; U; Android 11) gzip',
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
+        'X-YouTube-Client-Name': '1',
+        'X-YouTube-Client-Version': '18.33.38',
+    },
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android'],
+            'player_skip': ['webpage'],
+        }
     },
 }
 
