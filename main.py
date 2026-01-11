@@ -153,7 +153,7 @@ async def root():
     """Health check endpoint"""
     return {"status": "ok", "service": "youtube-proxy"}
 
-@app.get("/stream/{video_id}", methods=["GET", "HEAD"])
+@app.api_route("/stream/{video_id}", methods=["GET", "HEAD"])
 async def stream_audio(video_id: str, request: Request):
     """Stream audio for a YouTube video ID"""
     try:
@@ -178,7 +178,7 @@ async def stream_audio(video_id: str, request: Request):
         logger.error(f"Error in stream_audio: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/video/{video_id}", methods=["GET", "HEAD"])
+@app.api_route("/video/{video_id}", methods=["GET", "HEAD"])
 async def stream_video(video_id: str, request: Request):
     """Stream video for a YouTube video ID"""
     try:
