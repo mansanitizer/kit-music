@@ -76,57 +76,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# yt-dlp options optimized for Android Music client (reliable without PO tokens)
+# yt-dlp options (simplified for reliability with specific cookies)
 YDL_OPTS_AUDIO = {
-    'format': 'bestaudio*',
+    'format': 'bestaudio/best',
     'quiet': True,
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'user_agent': 'com.google.android.apps.youtube.music/6.42.52 (Linux; U; Android 13; en_US)',
-    'referer': 'https://www.youtube.com/',
-    'http_headers': {
-        'User-Agent': 'com.google.android.apps.youtube.music/6.42.52 (Linux; U; Android 13; en_US)',
-        'Accept': '*/*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate',
-        'X-YouTube-Client-Name': '3',
-        'X-YouTube-Client-Version': '18.11.34',
-    },
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['android_music', 'android'],
-            'player_skip': ['webpage'],
-        }
-    },
 }
 
 if COOKIE_FILE:
     YDL_OPTS_AUDIO['cookiefile'] = COOKIE_FILE
 
 
-# yt-dlp options for video - Capped at 480p for retro aesthetic and bandwidth efficiency
+# yt-dlp options for video - Capped at 480p for retro aesthetic
 YDL_OPTS_VIDEO = {
     'format': 'best[height<=480]/best',
     'quiet': True,
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'user_agent': 'com.google.android.youtube/18.33.38 (Linux; U; Android 11) gzip',
-    'referer': 'https://www.youtube.com/',
-    'http_headers': {
-        'User-Agent': 'com.google.android.youtube/18.33.38 (Linux; U; Android 11) gzip',
-        'Accept': '*/*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'X-YouTube-Client-Name': '1',
-        'X-YouTube-Client-Version': '18.33.38',
-    },
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['android'],
-            'player_skip': ['webpage'],
-        }
-    },
 }
 
 if COOKIE_FILE:
@@ -184,8 +153,13 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
             # Stream with comprehensive headers
             timeout = aiohttp.ClientTimeout(total=600 if is_video else 60, connect=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                # Prepare headers for the final YouTube fetch
-                target_headers = opts['http_headers'].copy()
+            # Prepare headers for the final YouTube fetch
+                target_headers = selected_format.get('http_headers', {}).copy()
+                if not target_headers:
+                    target_headers = {
+                        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+                        'Accept': '*/*', 
+                    }
                 
                 # Pass through the Range header if requested by the client
                 if client_headers and 'range' in {k.lower() for k in client_headers}:
