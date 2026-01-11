@@ -43,7 +43,13 @@ def setup_cookies():
                 if not domain: continue
                 
                 # Netscape spec: domain, include_subdomains, path, secure, expiry, name, value
-                include_subdomains = "TRUE" if domain.startswith('.') else "FALSE"
+                if domain == 'youtube.com' or domain == '.youtube.com':
+                    # Force subdomain inclusion for main domain cookies to ensure they work on www.youtube.com
+                    domain = '.youtube.com'
+                    include_subdomains = "TRUE"
+                else:
+                    include_subdomains = "TRUE" if domain.startswith('.') else "FALSE"
+                
                 cookie_path = cookie.get('path', '/')
                 secure = "TRUE" if cookie.get('secure', False) else "FALSE"
                 
