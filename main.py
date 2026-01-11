@@ -7,9 +7,35 @@ import logging
 from typing import AsyncIterator
 import aiohttp
 
+import os
+import json
+import tempfile
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def setup_cookies():
+    """Setup cookies from environment variable"""
+    cookies_json = os.environ.get('YOUTUBE_COOKIES')
+    if not cookies_json:
+        logger.warning("YOUTUBE_COOKIES environment variable not found")
+        return None
+        
+    try:
+        # Create a temp file for cookies
+        # valid JSON format (EditThisCookie export) is supported by yt-dlp
+        fd, path = tempfile.mkstemp(suffix='.txt', text=True)
+        with os.fdopen(fd, 'w') as f:
+            f.write(cookies_json)
+        
+        logger.info(f"Created cookie file at {path}")
+        return path
+    except Exception as e:
+        logger.error(f"Failed to setup cookies: {e}")
+        return None
+
+COOKIE_FILE = setup_cookies()
 
 app = FastAPI(title="YouTube Audio Proxy")
 
@@ -47,6 +73,10 @@ YDL_OPTS_AUDIO = {
     },
 }
 
+if COOKIE_FILE:
+    YDL_OPTS_AUDIO['cookiefile'] = COOKIE_FILE
+
+
 # yt-dlp options for video - Capped at 480p for retro aesthetic and bandwidth efficiency
 YDL_OPTS_VIDEO = {
     'format': 'best[height<=480]/best',
@@ -70,6 +100,10 @@ YDL_OPTS_VIDEO = {
         }
     },
 }
+
+if COOKIE_FILE:
+    YDL_OPTS_VIDEO['cookiefile'] = COOKIE_FILE
+
 
 async def stream_content(url: str, is_video: bool = False, client_headers: dict = None) -> AsyncIterator[bytes]:
     """Stream audio or video chunks from YouTube URL"""
