@@ -708,16 +708,18 @@ async def start_auth_link():
     async def run_oauth():
         try:
             cmd = [
-                "yt-dlp",
+                "python3", "-m", "yt_dlp",
                 "--username", "oauth2",
                 "--password", "",
                 "--cache-dir", "/tmp/yt-cache",
-                "--token-from-browser", "none",
-                "https://www.youtube.com/watch?v=ygsLpOwufoM", # dummy just to trigger it
-                "--simulate"
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ", # Neutral video
+                "--simulate",
+                "--no-check-certificate"
             ]
             
-            # Using Popen to capture stdout line by line
+            logger.info(f"Starting OAuth process: {' '.join(cmd)}")
+            
+            # Using Popen to capture stdout/stderr
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -726,26 +728,33 @@ async def start_auth_link():
                 bufsize=1
             )
             
+            output_captured = []
+            
             # Watch for the code in the output
-            # Example: [youtube] To sign in, go to https://www.google.com/device and enter ABCD-1234
             for line in process.stdout:
-                logger.info(f"OAUTH LOG: {line.strip()}")
-                if "https://www.google.com/device" in line:
-                    parts = line.split("enter")
+                line_str = line.strip()
+                output_captured.append(line_str)
+                logger.info(f"OAUTH: {line_str}")
+                
+                # [youtube] To sign in, go to https://www.google.com/device and enter ABCD-1234
+                if "https://www.google.com/device" in line_str:
+                    parts = line_str.split("enter")
                     if len(parts) > 1:
                         auth_state.current_code = parts[1].strip()
                         auth_state.current_url = "https://www.google.com/device"
                         logger.info(f"FOUND CODE: {auth_state.current_code}")
                 
-                # Check for success
-                if "logged in" in line.lower() or "linked" in line.lower():
+                if "logged in" in line_str.lower():
                     logger.info("OAuth success detected in logs")
                     
             process.wait()
+            
             if process.returncode != 0 and not auth_state.current_code:
-                 auth_state.last_error = f"Process exited with {process.returncode}"
+                 # Provide the last few lines of output for debugging
+                 last_lines = "\\n".join(output_captured[-5:])
+                 auth_state.last_error = f"Exit {process.returncode}: {last_lines}"
+                 logger.error(f"OAuth failed with code {process.returncode}. Output: {last_lines}")
                  
-            # Note: yt-dlp doesn't always exit 0 when just simulating
             auth_state.is_linking = False
             
         except Exception as e:
