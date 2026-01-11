@@ -399,7 +399,7 @@ YDL_OPTS_AUDIO = {
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
+    'extractor_args': {'youtube': {'player_client': ['tv', 'ios', 'android']}},
     'cache_dir': '/tmp/yt-cache'
 }
 
@@ -409,7 +409,7 @@ YDL_OPTS_VIDEO = {
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
-    'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
+    'extractor_args': {'youtube': {'player_client': ['tv', 'ios', 'android']}},
     'cache_dir': '/tmp/yt-cache'
 }
 
@@ -443,41 +443,51 @@ async def stream_content(url: str, is_video: bool = False, client_headers: dict 
                 logger.info(f"Extracting info for {url} (video={is_video})")
                 info = ydl.extract_info(url, download=False)
         except Exception as e:
-            # Fallback chain: Try different clients without cookies if we get a "Sign in" or "Bot" error
+            # Fallback chain: Try different clients/cookie combinations
             error_msg = str(e).lower()
-            if any(s in error_msg for s in ["sign in", "bot", "403", "unsupported", "not available"]):
-                 logger.warning(f"Strategy 1 failed ({e}), trying Strategy 2: Fallback clients without cookies...")
-                 
-                 fallback_strategies = [
-                     {'youtube': {'player_client': ['tv']}},
-                     {'youtube': {'player_client': ['android']}},
-                     {'youtube': {'player_client': ['mweb']}},
-                     {'youtube': {'player_client': ['ios']}},
-                 ]
-                 
-                 info = None
-                 last_err = e
-                 for strategy in fallback_strategies:
-                     logger.info(f"Retrying with client strategy: {strategy['youtube']['player_client']}")
-                     f_opts = opts.copy()
-                     if 'cookiefile' in f_opts:
-                         del f_opts['cookiefile']
-                     f_opts['extractor_args'] = strategy
-                     
-                     try:
-                         with yt_dlp.YoutubeDL(f_opts) as ydl:
-                            info = ydl.extract_info(url, download=False)
-                            if info:
-                                logger.info(f"Success with strategy: {strategy['youtube']['player_client']}")
-                                break
-                     except Exception as fe:
-                        logger.warning(f"Strategy {strategy['youtube']['player_client']} failed: {fe}")
-                        last_err = fe
-                 
-                 if not info:
-                     raise last_err
-            else:
-                raise e
+            logger.warning(f"Primary strategy failed ({e})")
+            
+            # The order of fallback is crucial: 
+            # 1. TV with cookies (most lenient for authenticated)
+            # 2. IOS with cookies
+            # 3. TV WITHOUT cookies (bypass IP-based cookie tainting)
+            # 4. IOS WITHOUT cookies
+            fallback_strategies = [
+                ({'youtube': {'player_client': ['tv']}}, True),
+                ({'youtube': {'player_client': ['ios']}}, True),
+                ({'youtube': {'player_client': ['tv']}}, False),
+                ({'youtube': {'player_client': ['ios']}}, False),
+                ({'youtube': {'player_client': ['mweb']}}, False),
+            ]
+            
+            info = None
+            last_err = e
+            for strategy_args, use_cookies in fallback_strategies:
+                f_opts = opts.copy()
+                if not use_cookies and 'cookiefile' in f_opts:
+                    del f_opts['cookiefile']
+                elif use_cookies and not f_opts.get('cookiefile'):
+                    # Ensure we have our best cookies if we want them
+                    if os.path.exists(auth_state.manual_cookie_file):
+                        f_opts['cookiefile'] = auth_state.manual_cookie_file
+                    elif COOKIE_FILE:
+                        f_opts['cookiefile'] = COOKIE_FILE
+                
+                f_opts['extractor_args'] = strategy_args
+                logger.info(f"Retrying with strategy: {strategy_args} (cookies={use_cookies})")
+                
+                try:
+                    with yt_dlp.YoutubeDL(f_opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        if info:
+                            logger.info(f"Success with strategy: {strategy_args}")
+                            break
+                except Exception as fe:
+                    logger.warning(f"Strategy {strategy_args} failed: {fe}")
+                    last_err = fe
+            
+            if not info:
+                raise last_err
             
         if not info:
              logger.error(f"yt-dlp failed to extract info for {url}")
@@ -637,7 +647,7 @@ async def dashboard():
 
                 <div style="margin-top: 20px; display: flex; flex-wrap: wrap; justify-content: center;">
                     <button onclick="showCookieDialog()" class="btn-large">Sync Cookies manually...</button>
-                    <button onclick="startLinking()" id="linkBtn" class="btn-large">Link Account (OAuth)...</button>
+                    <button onclick="clearCookies()" class="btn-large" style="color: darkred;">Clear Saved Cookies</button>
                     <button onclick="window.location.reload()" class="btn-large">Refresh Status</button>
                 </div>
 
@@ -726,6 +736,19 @@ async def dashboard():
             }}
             function hideCookieDialog() {{
                 document.getElementById('cookieDialog').classList.add('hidden');
+            }}
+
+            async function clearCookies() {{
+                if (!confirm('This will delete your manually synced cookies. Continue?')) return;
+                try {{
+                    const resp = await fetch('/auth/update-cookies', {{
+                        method: 'POST',
+                        body: ''
+                    }});
+                    const data = await resp.json();
+                    alert('Cookies cleared. Redirecting...');
+                    window.location.reload();
+                }} catch (e) {{ alert('Error: ' + e); }}
             }}
 
             async function saveCookies() {{
