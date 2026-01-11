@@ -862,11 +862,38 @@ async def dashboard():
                     
                     data.steps.forEach(step => {{
                         const li = document.createElement('li');
-                        let icon = step.status === 'success' ? '✅' : (step.status === 'failed' ? '❌' : '⏳');
+                        let icon = step.status === 'success' ? '✅' : (step.status === 'failed' ? '❌' : (step.status === 'warning' ? '⚠️' : '⏳'));
                         li.innerHTML = icon + ' ' + step.name + (step.error ? ': <span style="color:red">' + step.error + '</span>' : '');
                         if (step.title) li.innerHTML += ' (' + step.title + ')';
+                        if (step.note) li.innerHTML += ' <small><i>[' + step.note + ']</i></small>';
                         stepsList.appendChild(li);
                     }});
+
+                    if (data.available_formats && data.available_formats.length > 0) {{
+                        const li = document.createElement('li');
+                        li.innerHTML = '<strong>Available Formats:</strong>';
+                        const ul = document.createElement('ul');
+                        ul.style.maxHeight = '150px';
+                        ul.style.overflowY = 'auto';
+                        ul.style.fontSize = '10px';
+                        ul.style.background = '#000';
+                        ul.style.color = '#0f0';
+                        ul.style.padding = '5px';
+                        ul.style.listStyle = 'none';
+                        
+                        data.available_formats.forEach(f => {{
+                            const fli = document.createElement('li');
+                            fli.innerText = `${{f.id}}: ${{f.ext}} (${{f.res || 'none'}}) [A:${{f.acodec}}/V:${{f.vcodec}}] ${{f.note || ''}}`;
+                            ul.appendChild(fli);
+                        }});
+                        li.appendChild(ul);
+                        stepsList.appendChild(li);
+                    }} else if (!data.success && data.steps.some(s => s.name === "Extraction" && s.status === "success")) {{
+                         const li = document.createElement('li');
+                         li.style.color = 'orange';
+                         li.innerHTML = '⚠️ <strong>Restriction:</strong> Extraction succeeded but NO media formats were returned. YouTube is hiding formats from this IP/Session.';
+                         stepsList.appendChild(li);
+                    }}
                     
                     if (data.success) {{
                         const li = document.createElement('li');
@@ -876,6 +903,18 @@ async def dashboard():
                         li.innerText = 'OVERALL SUCCESS: Stream is reachable with current cookies!';
                         stepsList.appendChild(li);
                     }}
+                    
+                    // Add raw data view
+                    const rawBtn = document.createElement('button');
+                    rawBtn.innerText = 'View Raw JSON';
+                    rawBtn.style.fontSize = '9px';
+                    rawBtn.style.marginTop = '10px';
+                    rawBtn.onclick = () => {{
+                        console.log(data);
+                        alert('JSON output sent to console. Open DevTools (F12) to see details, or check the alert below:\\n\\n' + JSON.stringify(data, null, 2).substring(0, 500) + '...');
+                    }};
+                    stepsList.appendChild(rawBtn);
+                    
                 }} catch (e) {{
                     stepsList.innerHTML += '<li style="color:red">Test failed to run: ' + e + '</li>';
                 }}
@@ -1069,23 +1108,38 @@ async def test_stream(test_type: str, video_id: str):
                 try:
                     info = ydl.extract_info(url, download=False)
                 except Exception as ee:
-                    if "format is not available" in str(ee).lower():
-                        # Force extraction of just the info without format restriction to see what IS there
+                    err_str = str(ee).lower()
+                    if "format is not available" in err_str or "no format" in err_str:
+                        # Force extraction of just the info WITHOUT format restriction to see what IS there
                         tmp_opts = opts.copy()
-                        tmp_opts['format'] = None
-                        info = ydl.extract_info(url, download=False)
-                        results["steps"][-1].update({"status": "warning", "note": "Primary format failed, but formats were found."})
+                        tmp_opts['format'] = None  # Reset format to get everything
+                        try:
+                            info = ydl.extract_info(url, download=False)
+                            results["steps"][-1].update({"status": "warning", "note": "Primary format selector failed, forced full format list discovery."})
+                        except Exception as ignore_err:
+                            raise ee # Re-raise original error if even basic extraction fails
                     else:
                         raise ee
                         
                 results["steps"][-1].update({"status": "success", "title": info.get('title')})
                 
                 # Capture all formats for debugging
-                if info.get('formats'):
+                formats = info.get('formats', [])
+                if formats:
                     results["available_formats"] = [
-                        {"id": f.get('format_id'), "ext": f.get('ext'), "res": f.get('resolution'), "note": f.get('format_note'), "acodec": f.get('acodec'), "vcodec": f.get('vcodec')}
-                        for f in info['formats']
+                        {
+                            "id": f.get('format_id'), 
+                            "ext": f.get('ext'), 
+                            "res": f.get('resolution') or f.get('format_note'), 
+                            "note": f.get('format_note'), 
+                            "acodec": f.get('acodec'), 
+                            "vcodec": f.get('vcodec')
+                        }
+                        for f in formats
                     ]
+                else:
+                    results["available_formats"] = []
+                    logger.warning(f"Extraction succeeded for {url} but 'formats' list is empty!")
         except Exception as e:
             results["steps"][-1].update({"status": "failed", "error": str(e)})
             return results
