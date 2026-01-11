@@ -339,6 +339,7 @@ YDL_OPTS_AUDIO = {
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
+    'extractor_args': {'youtube': {'player_client': ['tv']}},
 }
 
 if COOKIE_FILE:
@@ -352,6 +353,7 @@ YDL_OPTS_VIDEO = {
     'no_warnings': True,
     'extract_flat': False,
     'nocheckcertificate': True,
+    'extractor_args': {'youtube': {'player_client': ['tv']}},
 }
 
 if COOKIE_FILE:
